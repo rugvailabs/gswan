@@ -18,6 +18,7 @@ function Card({ w, finding }: { w: WorkerView; finding?: MonitorFinding }) {
   const setTarget = useStore((s) => s.setMentionTarget);
   const setAgent = useStore((s) => s.setAgent);
   const agent = useStore((s) => s.agent);
+  const openThread = useStore((s) => s.openThread);
   const task = w.task;
   return (
     <article aria-label={`worker ${w.name}`} className="flex flex-col gap-2 rounded-lg border p-3" style={{ backgroundColor: "var(--panel)", borderColor: "var(--line)" }}>
@@ -37,6 +38,11 @@ function Card({ w, finding }: { w: WorkerView; finding?: MonitorFinding }) {
         <p className={`text-sm ${STATE_TONE[finding.state]}`} title={finding.detail}>monitor: {finding.state} — {finding.detail}</p>
       )}
       {w.status === "running" && <p className="mono text-xs tone-muted">{w.activityNote ?? "starting"} · {timeAgo(w.lastActivity)}</p>}
+      {w.recentTools && w.recentTools.length > 0 && (
+        <ul aria-label={`${w.name} recent tools`} className="mono space-y-0.5 text-xs tone-muted">
+          {w.recentTools.slice(-4).map((t, i) => <li key={`${i}-${t}`} className="truncate" title={t}>{t}</li>)}
+        </ul>
+      )}
       {w.lastError && <p className="text-xs tone-bad">{w.lastError}</p>}
       <dl className="grid grid-cols-2 gap-x-3 text-xs tone-muted">
         <dt>owns</dt><dd className="mono truncate" title={w.owns.join(", ")}>{w.owns.join(", ")}</dd>
@@ -50,6 +56,7 @@ function Card({ w, finding }: { w: WorkerView; finding?: MonitorFinding }) {
         <button className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--line)" }} aria-pressed={agent === w.name} onClick={() => setAgent(agent === w.name ? null : w.name)}>
           {agent === w.name ? "show all" : "filter board"}
         </button>
+        <button className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--line)" }} onClick={() => openThread(w.name)}>conversation</button>
       </div>
     </article>
   );
@@ -61,7 +68,7 @@ export function WorkerCards() {
   if (status.workers.length === 0) return <p className="text-sm tone-muted">No workers yet. The coordinator defines them with define_worker.</p>;
   const byName = new Map(status.monitor.map((f) => [f.worker, f]));
   return (
-    <section aria-label="workers" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <section aria-label="workers" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {status.workers.map((w) => <Card key={w.name} w={w} finding={byName.get(w.name)} />)}
     </section>
   );

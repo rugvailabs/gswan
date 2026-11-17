@@ -41,6 +41,7 @@ export interface WorkerView {
   queue: number;
   lastActivity: string | null;
   activityNote: string | null;
+  recentTools?: string[];
   lastError: string | null;
   task: TaskView | null;
 }
@@ -71,3 +72,6 @@ export interface SwarmInfo {
   status: string;
   createdAt: string;
 }
+
+export interface WorkerDraft { name: string; goal: string; owns: string[]; tools: string[]; model: "sonnet" | "haiku" | "opus"; message?: string }
+export interface LimitsDraft { maxWorkers?: number; maxWakeups?: number; maxWallS?: number; maxCostUsd?: number }

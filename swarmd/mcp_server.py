@@ -64,7 +64,7 @@ class SwarmTools:
             task = None
         return {"task": task, "name": w.name, "status": w.status, "busy": self._busy(w.name), "turns": w.turns,
                 "costUsd": round(w.cost_usd, 4), "owns": w.owns, "branch": w.branch, "model": w.model, "queue": self.runner.reg.queue_len(w),
-                "lastActivity": w.last_activity, "activityNote": w.activity_note,
+                "recentTools": w.recent_tools, "lastActivity": w.last_activity, "activityNote": w.activity_note,
                 "worktree": w.worktree, "lastError": w.last_error, "lastResult": self.last.get(w.name)}
 
     # ---- coordinator tools ----------------------------------------------------
@@ -142,6 +142,14 @@ class SwarmTools:
             return out
         except (IntegrationError, WorkerError, NoActiveSwarm) as e:
             return self._err(e)
+
+    def set_limits(self, **kw) -> dict:
+        """Human-only (HTTP API / CLI), deliberately not an MCP tool: the coordinator cannot raise its own budget."""
+        try:
+            self.runner.limits.set(**kw)
+        except (ValueError, NoActiveSwarm) as e:
+            return self._err(e)
+        return {"ok": True, **self.runner.limits.snapshot()}
 
     def swarm_status(self) -> dict:
         try:

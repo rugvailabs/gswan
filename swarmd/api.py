@@ -32,6 +32,22 @@ async def event_stream(board: Board, since: int, poll: float = 0.5,
             idle += poll
 
 
+class WorkerIn(CamelModel):
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
+    goal: str = Field(min_length=1, max_length=4000)
+    owns: list[str] = Field(min_length=1, max_length=32)
+    tools: list[str] = Field(default_factory=list, max_length=32)
+    model: str = Field(default="sonnet", pattern=r"^(sonnet|haiku|opus)$")
+    message: str | None = Field(default=None, max_length=8000)  # optional first @mention that wakes it
+
+
+class LimitsIn(CamelModel):
+    max_workers: int | None = Field(default=None, gt=0, le=64)
+    max_wakeups: int | None = Field(default=None, gt=0, le=2000)
+    max_wall_s: int | None = Field(default=None, gt=0, le=86400)
+    max_cost_usd: float | None = Field(default=None, gt=0, le=1000)
+
+
 class MentionIn(CamelModel):
     message: str = Field(min_length=1, max_length=8000)
     sender: str = Field(default="human", pattern=r"^[A-Za-z0-9_.-]{1,64}$")
@@ -100,6 +116,22 @@ def create_app(board: Board, token: str | None = None, tools=None, ui_dir: Path 
             out = tools.swarm_status()
             if not out.get("ok"):
                 raise NoActiveSwarm(out.get("error", "no active swarm"))
+            return out
+
+        @app.post("/workers", status_code=201, dependencies=guard)
+        def add_worker(body: WorkerIn) -> dict:
+            out = tools.define_worker(body.name, body.goal, body.owns, body.tools, body.model)
+            if not out.get("ok"):
+                raise HTTPException(400, out.get("error", "could not define worker"))
+            if body.message:
+                tools.invoke_worker(body.name, body.message, sender="human")
+            return out
+
+        @app.post("/limits", dependencies=guard)
+        def set_limits(body: LimitsIn) -> dict:
+            out = tools.set_limits(**{k: v for k, v in body.model_dump().items() if v is not None})
+            if not out.get("ok"):
+                raise HTTPException(400, out.get("error", "invalid limits"))
             return out
 
         @app.post("/workers/{name}/mentions", status_code=202, dependencies=guard)

@@ -356,6 +356,9 @@ class Runner:
                                                 body=(f"worker {name} turn was terminated (monitor/user); it will be resumed" if killed
                                                       else f"worker {name} turn failed: {err}")[:2000]))
                         break
+                    if text and text.strip():  # the worker's own words for this turn, so the dashboard can show the conversation
+                        self.board.post(EventIn(agent="swarmd", kind="update", body=f"{name} replied: {text.strip()}"[:2500],
+                                                refs=[f"reply:{name}"]))
                     if denials:
                         self.board.post(EventIn(agent="swarmd", kind="update",
                                                 body=f"worker {name} was denied: {'; '.join(sorted(set(denials)))}"[:2000]))

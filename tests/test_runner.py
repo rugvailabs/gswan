@@ -203,3 +203,9 @@ def test_node_modules_not_linked_when_not_ignored(repo, tmp_path):
     (repo / "node_modules").mkdir()
     board, r, fake = make(repo, tmp_path); r.define(WorkerSpec(**SPEC)); r.invoke("api", "go")
     assert not (repo / ".swarm" / "wt" / "api" / "node_modules").exists()
+
+
+def test_worker_reply_is_posted_to_the_board_with_a_reply_ref(repo, tmp_path):
+    board, r, _ = make(repo, tmp_path); r.define(WorkerSpec(**SPEC)); r.invoke("api", "go")
+    evs = [e for e in board.list_events().items if "reply:api" in e.refs]
+    assert len(evs) == 1 and evs[0].agent == "swarmd" and evs[0].body.startswith("api replied: ok:")

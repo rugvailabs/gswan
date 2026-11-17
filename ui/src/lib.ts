@@ -65,3 +65,31 @@ export function budgetParts(b: { limits?: { max_wakeups: number; max_cost_usd: n
     part("workers", b.usage.workers, b.limits.max_workers, (n) => String(n)),
   ];
 }
+
+/** "@target rest" -> target; mentions are how agents talk to each other. */
+export function mentionTarget(e: Pick<BoardEvent, "kind" | "body">): string | null {
+  if (e.kind !== "mention") return null;
+  return /^@([A-Za-z0-9_.-]+)/.exec(e.body)?.[1] ?? null;
+}
+
+/** The agent whose words an event carries: swarmd posts a worker's turn reply on its behalf (refs: reply:<worker>). */
+export function speaker(e: Pick<BoardEvent, "agent" | "refs">): string {
+  const r = e.refs.find((x) => x.startsWith("reply:"));
+  return r ? r.slice(6) : e.agent;
+}
+
+export function isReply(e: Pick<BoardEvent, "refs">): boolean {
+  return e.refs.some((x) => x.startsWith("reply:"));
+}
+
+/** Everything one agent said, plus every mention addressed to it, in order. */
+export function threadFor(events: BoardEvent[], agent: string): BoardEvent[] {
+  return events.filter((e) => speaker(e) === agent || mentionTarget(e) === agent);
+}
+
+export function agentsIn(events: BoardEvent[], workers: string[]): { name: string; count: number }[] {
+  const names = new Set<string>(workers);
+  for (const e of events) { names.add(speaker(e)); const t = mentionTarget(e); if (t) names.add(t); }
+  names.delete("swarmd");
+  return [...names].sort().map((name) => ({ name, count: threadFor(events, name).length }));
+}

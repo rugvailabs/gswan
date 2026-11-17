@@ -42,6 +42,8 @@ beforeEach(() => {
     if (url.startsWith("/swarms/current")) return json({ id: "swm_1", task: "build the thing", status: "active", createdAt: "x" });
     if (url.startsWith("/status")) return json(status);
     if (url.startsWith("/events?")) return json({ items: [ev(1, "coordinator", "plan", "split work"), ev(2, "api", "claim", "taking api")], total: 2, limit: 500, offset: 0 });
+    if (url === "/workers" && init?.method === "POST") return json({ ok: true, worker: "docs" }, 201);
+    if (url === "/limits" && init?.method === "POST") return json({ ok: true }, 200);
     if (url.startsWith("/workers/api/mentions")) return json({ ok: true, started: "api" }, 202);
     if (url === "/events") return json(ev(9, "human", "human", JSON.parse(String(init?.body)).body), 201);
     return json({ message: "nope" }, 404);
@@ -107,7 +109,7 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText("taking api");
-    await user.click(screen.getByRole("tab", { name: "Board note" }));
+    await user.click(screen.getByRole("tab", { name: "Note" }));
     await user.type(screen.getByLabelText("Note"), "freeze the API shape");
     await user.click(screen.getByRole("button", { name: /Post note/ }));
     expect(await within(screen.getByRole("region", { name: "board" })).findByText("freeze the API shape")).toBeInTheDocument();
@@ -118,5 +120,39 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("alert")).toHaveTextContent(/no active swarm/);
     expect(screen.getByRole("alert")).toHaveTextContent(/swarm init/);
+  });
+
+  it("shows an agent's conversation: mentions to it and its own replies", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("taking api");
+    useStore.getState().addEvents([
+      ev(3, "coordinator", "mention", "@api build the endpoint"),
+      { ...ev(4, "swarmd", "update", "api replied: endpoint done"), refs: ["reply:api"] },
+    ]);
+    await user.click(screen.getByRole("tab", { name: /Conversations/ }));
+    await user.click(within(screen.getByRole("list", { name: "agents" })).getByRole("button", { name: /^api/ }));
+    const thread = screen.getByRole("list", { name: "thread" });
+    expect(within(thread).getByText("@api build the endpoint")).toBeInTheDocument();
+    expect(within(thread).getByText("api replied: endpoint done")).toBeInTheDocument();
+    expect(within(thread).getByText("reply")).toBeInTheDocument();
+  });
+
+  it("adds a worker and raises limits from the side panel", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("taking api");
+    await user.click(screen.getByRole("tab", { name: "+ Worker" }));
+    await user.type(screen.getByLabelText(/^Name/), "docs");
+    await user.type(screen.getByLabelText(/^Goal/), "write docs");
+    await user.type(screen.getByLabelText(/^Owns/), "docs/, README.md");
+    await user.click(screen.getByRole("button", { name: "Add worker" }));
+    await waitFor(() => expect(calls.some((c) => c.url === "/workers" && c.init?.method === "POST")).toBe(true));
+    const body = JSON.parse(String(calls.find((c) => c.url === "/workers")?.init?.body));
+    expect(body).toMatchObject({ name: "docs", owns: ["docs/", "README.md"], model: "sonnet" });
+    await user.click(screen.getByRole("tab", { name: "Budget" }));
+    await user.type(screen.getByLabelText(/Max workers/), "12");
+    await user.click(screen.getByRole("button", { name: "Save limits" }));
+    await waitFor(() => expect(JSON.parse(String(calls.find((c) => c.url === "/limits")?.init?.body))).toEqual({ maxWorkers: 12 }));
   });
 });

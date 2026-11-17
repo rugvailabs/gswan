@@ -143,3 +143,28 @@ def test_swarm_dir_ignores_itself(tmp_path):
     assert (d / ".gitignore").read_text() == "*\n"
     (d / ".gitignore").write_text("custom\n"); cli.ensure_swarm_dir(tmp_path)
     assert (d / ".gitignore").read_text() == "custom\n"  # never clobbered
+
+
+def test_human_can_add_workers_and_raise_limits_over_http(tmp_path):
+    from swarmd.mcp_server import SwarmTools
+    from swarmd.runner import Runner
+    from test_runner import FakeClaude, git
+    root = tmp_path / "p"; root.mkdir()
+    git(root, "init", "-q", "-b", "main"); git(root, "config", "user.email", "t@t"); git(root, "config", "user.name", "t")
+    (root / "f").write_text("x"); git(root, "add", "."); git(root, "commit", "-qm", "i"); (root / ".swarm").mkdir()
+    board = Board(root / ".swarm" / "swarm.db")
+    tools = SwarmTools(board, Runner(board, root, executor=FakeClaude()))
+    c = TestClient(create_app(board, "tok", tools, ui_dir=None)); h = {"Authorization": "Bearer tok"}
+    c.post("/swarms", json={"task": "t"}, headers=h)
+    assert c.post("/limits", json={"maxWorkers": 1}, headers=h).json()["limits"]["max_workers"] == 1
+    w = {"name": "api", "goal": "build", "owns": ["src/api"]}
+    assert c.post("/workers", json=w, headers=h).status_code == 201
+    second = c.post("/workers", json={**w, "name": "ui", "owns": ["src/ui"]}, headers=h)
+    assert second.status_code == 400 and "limit" in second.json()["detail"]  # over the cap until a human raises it
+    assert c.post("/limits", json={"maxWorkers": 12}, headers=h).json()["limits"]["max_workers"] == 12
+    assert c.post("/workers", json={**w, "name": "ui", "owns": ["src/ui"], "message": "start"}, headers=h).status_code == 201
+    tools.wait_for_workers(timeout_s=20)
+    assert {x["name"] for x in c.get("/status", headers=h).json()["workers"]} == {"api", "ui"}
+    assert c.post("/limits", json={"maxWorkers": 0}, headers=h).status_code == 422
+    assert c.post("/workers", json={**w, "name": "Bad Name"}, headers=h).status_code == 422
+    assert c.post("/workers", json=w).status_code == 401
