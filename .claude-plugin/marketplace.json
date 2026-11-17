@@ -1,0 +1,12 @@
+{
+  "name": "gswan",
+  "owner": { "name": "gswan" },
+  "plugins": [
+    {
+      "name": "swarm",
+      "source": "./",
+      "description": "Coordinator + named persistent workers + verifier gate + monitor + live board for Claude Code",
+      "version": "0.1.0"
+    }
+  ]
+}

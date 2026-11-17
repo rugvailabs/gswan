@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.swarm/*.db*
+.swarm/board.md
+.swarm/archive/
+.swarm/token
+.pytest_cache/
+.swarm/wt/
+.swarm/hooks.json
+.swarm/stop-*.count
+ui/node_modules/
+ui/test-results/
+ui/playwright-report/

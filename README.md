@@ -1,0 +1,90 @@
+# swarm — multi-agent swarms for Claude Code
+
+A coordinator splits a big task across **named, persistent workers**. Each worker is its own Claude session in its own git worktree, can only write inside the paths it owns, and costs nothing while idle. A **read-only verifier** checks every `done`, a **monitor** catches hung or looping workers, and everything is visible on a **live message board** (CLI, MCP tools and a web UI).
+
+Modelled on the behaviour described for Google Antigravity's `/swarm` (coordinator, named workers, verifier, monitor, shared board). Antigravity 1.22.2 contains no `/swarm` code, so the verifier, monitor and board here are our own design from that description. See `DESIGN.md`.
+
+## Requirements
+- Claude Code (tested with 2.1.326) signed in; headless workers use the same auth (`claude auth login` / `claude setup-token`)
+- [`uv`](https://docs.astral.sh/uv/) (installs the Python deps on first use) and `git`
+- Your project must be a git repo **with at least one commit** (workers get worktrees)
+
+## Install
+As a plugin (from a local clone or any git URL):
+```
+/plugin marketplace add /path/to/gswan
+/plugin install swarm@gswan
+```
+Or try it without installing: `claude --plugin-dir /path/to/gswan`.
+
+The plugin adds: the `/swarm:swarm` skill, the `swarm` MCP server, and two hooks (env warm-up on session start; a Stop hook that keeps the coordinator from finishing while tasks are unverified). The first session after install runs `uv sync` in the background; if the server is not up yet, run `/mcp` once and reconnect.
+
+## Use
+```
+/swarm:swarm Build a todo CLI with tests: storage, commands, and docs as separate parts
+```
+The coordinator will: start a swarm, define workers with disjoint owned paths, wake them in parallel, wait, react to `blocked` events, then call `merge_workers`, which merges every verified worker branch into `swarm/<swarmId>/integration` in its own worktree (your checked-out branch is never touched). A conflict is handed to an `integrator` worker, which is verified like any other. When it reports `allMerged`, apply the result yourself:
+```
+swarm integrate --apply      # merges the integration branch into your current branch (refuses on a dirty tree)
+```
+Give the coordinator `Bash(python3:*)` (or your test command) if you want it to run the tests in the integration worktree.
+
+Workers can also ask each other for things (`swarm mention <worker> "..."`, delivered by the monitor within ~15 s, max 5 messages per pair).
+
+Budgets protect you: each swarm defaults to 6 workers, 40 wake-ups, 1 hour and $10. The coordinator can pick lower or higher values at `swarm_start` (tell it in your prompt); only you can raise them mid-run: `swarm limits --set max_cost_usd=20`. When a budget is hit, workers stop, a `blocked` event is posted and queued messages wait.
+
+Watch and steer from the browser:
+```
+uv run --project /path/to/gswan swarm serve      # prints http://127.0.0.1:7777/?token=...
+```
+Cards per worker (status, task, monitor warnings, activity, cost), the live board with filters, and a box to `@mention` a worker or post a note.
+
+## How it works
+| Piece | What it does |
+|---|---|
+| Workers | `claude -p --session-id/--resume` per worker, own worktree + branch. Idle = no process = no tokens. `@mention` = resume. One turn at a time per worker (extra mentions are queued and merged). |
+| Ownership | `PreToolUse` hook denies Write/Edit outside the worker's `owns`. Bash goes through a command-policy hook: the board CLI, git (status/diff/log/add/commit, merge of this swarm's branches), mkdir/touch inside the worktree, read-only tools, and only the commands you grant at `define_worker`. Env prefixes (`PYTHONPATH=src`), `cd <subdir> &&`, `;` and pipes between allowed commands work; redirections, `$(...)`, backticks, background jobs and `cd` outside the worktree are denied. |
+| Verifier | A worker's `done` is provisional. A read-only `verify-<worker>` session inspects the diff, runs the granted checks and gives a verdict. Fail sends numbered reasons back to the same worker; two failed rounds (or no verdict twice) escalate to you. |
+| Monitor | Detects *hung* (no output), *looping* (identical tool calls / posts) and *forgot to report* without an LLM. Ladder: nudge, kill and resume with a restart prompt, escalate. Optional `--llm-judge` / `SWARM_MONITOR_LLM=1`: a cheap Haiku call (no tools, $0.05 cap) is asked whether a quiet worker is legitimately busy (long build/tests) before it is killed, up to twice per episode. It also dispatches peer mentions. |
+| Integration | `merge_workers` / `swarm integrate`: clean merges in order, conflicts to a verified `integrator` worker, result on `swarm/<id>/integration`, applied by you. |
+| Budgets | Per-swarm caps on workers, wake-ups, wall time and cost, enforced before every turn. |
+| Board | SQLite event log (`.swarm/swarm.db`), mirrored to `.swarm/board.md`; secrets are redacted before storage. |
+| Stop hook | Blocks the coordinator (max 3 times) while any task is not `done`/`escalated`. |
+
+MCP tools (coordinator): `swarm_start`, `define_worker`, `invoke_worker` (non-blocking), `wait_for_workers` (≤110 s, call again if `timedOut`), `merge_workers`, `swarm_status`, `board_post`, `board_digest`.
+
+CLI: `swarm init|post|show|tail|digest|stale|export|tasks|limits|mention|integrate|monitor|serve`, `swarm worker define|list|invoke`, `swarm verdict` (verifier role only; `--force` for humans).
+
+## Configuration (environment)
+| Variable | Default | Meaning |
+|---|---|---|
+| `SWARM_HOME` | nearest `.swarm/`, else git root, else cwd | project root |
+| `SWARM_VERIFIER_MODEL` | `sonnet` | model for verifiers |
+| `SWARM_MONITOR` | `1` | `0` disables the monitor thread |
+| `SWARM_MONITOR_INTERVAL` | `15` | seconds between monitor checks |
+| `SWARM_MONITOR_LLM` | off | `1` enables the Haiku stall judge |
+| `SWARM_CLAUDE_BIN` | `claude` | path to the claude binary |
+
+`.swarm/` ignores itself, so a swarm never dirties your repo status.
+
+## Safety model and limits
+- Workers run with `--permission-mode dontAsk`; file tools are allowlisted, every Bash call is judged by `swarmd/bashpolicy.py` (strict parser, tested against evasion attempts). Each turn is capped at $2 and each swarm by its budgets. Check `swarm worker list` / `swarm limits`.
+- The ownership hook covers file-write tools. Bash redirections are refused, but a granted program such as `python3` can still write anywhere (python3 -c is arbitrary code), and read commands (cat, grep) can read any file you can. Grant narrowly: `Bash(python3 -m pytest:*)` instead of `Bash(python3:*)`. The policy removes friction; it is not a sandbox.
+- The server binds to 127.0.0.1 and requires the token in `.swarm/token`.
+- Monitor thresholds (300 s of silence = hung) are defaults; a long legitimate command looks like a hang. Tune with `swarm monitor --stall-s`.
+- Conflict resolution is done by a model (the integrator) and verified by a read-only verifier, but still review the integration branch before `--apply`.
+- Platforms: developed and tested on macOS. Linux should work (same POSIX process-group logic) but is untested. **Windows is not supported** (POSIX process groups, `sh` hook commands).
+- Plugin path installs (`/plugin marketplace add /local/path`) run the plugin from that folder in place; GitHub installs copy only committed files (~1 MB).
+
+## Develop
+```
+uv run pytest                      # backend tests
+cd ui && npm install
+npm test                           # vitest tests
+npm run build                      # writes ui/dist (committed so the plugin ships it)
+npm run e2e                        # 6 Playwright tests, system Chrome, real server + fake claude
+claude plugin validate .
+```
+Layout: `swarmd/` (board, workers, runner, gate, monitor, api, mcp_server, cli), `skills/swarm/`, `hooks/`, `.claude-plugin/`, `ui/`, `tests/`.
+
+License: MIT (see `LICENSE`).

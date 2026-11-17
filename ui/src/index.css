@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e2e5ea;
+  --text: #15181e;
+  --muted: #667085;
+  --ok: #15803d;
+  --bad: #b42318;
+  --warn: #b45309;
+  --info: #1d4ed8;
+  --human: #7e22ce;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --line: #262d38;
+    --text: #e6e9ee;
+    --muted: #8b95a5;
+    --ok: #4ade80;
+    --bad: #f87171;
+    --warn: #fbbf24;
+    --info: #60a5fa;
+    --human: #c084fc;
+    color-scheme: dark;
+  }
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tone-ok { color: var(--ok); } .tone-bad { color: var(--bad); } .tone-warn { color: var(--warn); }
+.tone-info { color: var(--info); } .tone-human { color: var(--human); } .tone-muted { color: var(--muted); }
