@@ -2,12 +2,27 @@
   "name": "swarm",
   "version": "0.1.0",
   "description": "Multi-agent swarm for Claude Code: a coordinator splits a task across named, persistent workers (own git worktrees, enforced file ownership), with a read-only verifier gate, a stall/loop monitor, a live shared message board and a web UI.",
-  "author": { "name": "gswan" },
-  "keywords": ["multi-agent", "swarm", "orchestration", "subagents", "verifier"],
+  "author": {
+    "name": "gswan"
+  },
+  "keywords": [
+    "multi-agent",
+    "swarm",
+    "orchestration",
+    "subagents",
+    "verifier"
+  ],
   "mcpServers": {
     "swarm": {
       "command": "uv",
-      "args": ["run", "--quiet", "--project", "${CLAUDE_PLUGIN_ROOT}", "swarm-mcp"]
+      "args": [
+        "run",
+        "--quiet",
+        "--project",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "swarm-mcp"
+      ]
     }
-  }
+  },
+  "icon": "./.claude-plugin/icon.png"
 }

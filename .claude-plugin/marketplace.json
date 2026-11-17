@@ -1,6 +1,9 @@
 {
   "name": "gswan",
-  "owner": { "name": "gswan" },
+  "description": "Multi-agent swarms for Claude Code: coordinator, persistent workers, verifier gate, monitor and live board.",
+  "owner": {
+    "name": "gswan"
+  },
   "plugins": [
     {
       "name": "swarm",
