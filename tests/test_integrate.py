@@ -133,3 +133,19 @@ def test_verify_integration_runs_verifier_over_the_merged_branch(repo):
     assert any(e.agent == "verify-integrator" and e.body.startswith("pass integrator") for e in ev)
     integ.verify_integration().join(30)  # re-verifiable (task reopens), still no conflicts with the done state
     assert Tasks(board).get("integrator").status == "done"
+
+
+def test_second_swarm_gets_its_own_integration_worktree_and_branch(repo):
+    board, r, team, gate, integ = setup(repo, {"api": {"src/api/a.py": "A\n"}}, workers=("api",))
+    gate.invoke("api", "go"); first = integ.merge_ready()
+    wt1, b1 = integ.paths()
+    board.start_swarm("second")
+    r2 = Runner(board, repo, executor=Team(board, {"web": {"src/web/w.py": "W\n"}}))
+    r2.define(WorkerSpec(name="web", goal="build web", owns=["src/web"]))
+    gate2 = Gate(r2); gate2.invoke("web", "go"); integ2 = Integrator(gate2)
+    out = integ2.merge_ready()
+    wt2, b2 = integ2.paths()
+    assert first["ok"] and out["ok"] and out["merged"] == ["web"]
+    assert wt1 != wt2 and b1 != b2 and out["branch"] == b2
+    assert (wt2 / "src/web/w.py").exists() and not (wt2 / "src/api/a.py").exists()  # nothing leaked from swarm 1
+    assert not (wt1 / "src/web").exists()

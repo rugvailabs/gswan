@@ -36,7 +36,8 @@ class Integrator:
 
     def paths(self) -> tuple[Path, str]:
         sw = self.board._require()
-        return self.root / ".swarm" / "wt" / "_integration", f"swarm/{sw.id}/integration"
+        # one worktree per swarm: a shared path made a second swarm silently merge into the first swarm's branch
+        return self.root / ".swarm" / "wt" / f"_integration-{sw.id}", f"swarm/{sw.id}/integration"
 
     def ensure(self) -> tuple[Path, str]:
         wt, branch = self.paths()
