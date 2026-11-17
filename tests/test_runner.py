@@ -189,3 +189,17 @@ def test_guard_paths(path, allowed):
 def test_guard_ignores_reads_and_non_swarm_sessions():
     assert guard.decide({"tool_name": "Read", "tool_input": {"file_path": "/etc/passwd"}}, ENV) is None
     assert guard.decide({"tool_name": "Write", "tool_input": {"file_path": "/etc/x"}}, {}) is None
+
+
+def test_node_modules_symlinked_into_worktree_when_ignored(repo, tmp_path):
+    (repo / ".gitignore").write_text("node_modules\n"); git(repo, "add", "."); git(repo, "commit", "-qm", "ignore")
+    (repo / "node_modules").mkdir(); (repo / "node_modules" / "pkg").write_text("x")
+    board, r, fake = make(repo, tmp_path); r.define(WorkerSpec(**SPEC)); r.invoke("api", "go")
+    link = repo / ".swarm" / "wt" / "api" / "node_modules"
+    assert link.is_symlink() and (link / "pkg").read_text() == "x"
+
+
+def test_node_modules_not_linked_when_not_ignored(repo, tmp_path):
+    (repo / "node_modules").mkdir()
+    board, r, fake = make(repo, tmp_path); r.define(WorkerSpec(**SPEC)); r.invoke("api", "go")
+    assert not (repo / ".swarm" / "wt" / "api" / "node_modules").exists()

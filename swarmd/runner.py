@@ -170,7 +170,19 @@ class Runner:
             raise RunnerError(f"git worktree add failed: {r.stderr.strip()}")
         self.reg.set_worktree(w, str(path), branch)
         self.reg.set_base(w, base)
+        self._link_dependencies(path)
         return path
+
+    def _link_dependencies(self, path: Path) -> None:
+        """Untracked dependency folders (node_modules) are absent from a fresh worktree, so tests could not run there.
+        Symlink the project's installed copy; git ignores it only if the project's .gitignore does (node_modules always is)."""
+        src = self.root / "node_modules"
+        dst = path / "node_modules"
+        if src.is_dir() and not dst.exists() and _git(self.root, "check-ignore", "-q", "node_modules").returncode == 0:
+            try:
+                dst.symlink_to(src, target_is_directory=True)
+            except OSError:
+                pass
 
     def settings_path(self) -> Path:
         p = self.root / ".swarm" / "hooks.json"
