@@ -105,7 +105,8 @@ def test_report_summary_and_markdown():
 
 def test_cli_eval_is_a_dry_run_without_yes(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_HOME", str(tmp_path)); monkeypatch.chdir(tmp_path)
+    before = sorted((ROOT / "results").glob("*")) if (ROOT / "results").exists() else []
     assert main(["eval", "--task", "textkit", "--mode", "single", "--mode", "swarm", "--repeat", "2"]) == 0
     out = capsys.readouterr().out
-    assert "4 real run(s)" in out and "dry run: nothing executed" in out and not (ROOT / "results").exists()
+    assert "4 real run(s)" in out and "dry run: nothing executed" in out and (sorted((ROOT / "results").glob("*")) if (ROOT / "results").exists() else []) == before
     assert main(["eval", "--mode", "bogus"]) == 2

@@ -14,7 +14,7 @@ from .workers import Registry
 
 
 def in_scope(path: str, owns: list[str]) -> bool:
-    return any(path == o.rstrip("/") or path.startswith(o.rstrip("/") + "/") for o in owns)
+    return any(o in (".", "./", "") or path == o.rstrip("/") or path.startswith(o.rstrip("/") + "/") for o in owns)
 
 
 def changed_files(root: Path, base: str | None, branch: str | None) -> list[str] | None:

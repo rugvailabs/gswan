@@ -46,6 +46,7 @@ def test_scope_drift_is_detected(repo):
 def test_in_scope_matching():
     assert report.in_scope("src/api/a.py", ["src/api"]) and report.in_scope("src/api", ["src/api/"])
     assert not report.in_scope("src/apix/a.py", ["src/api"])
+    assert report.in_scope("anything/x.py", ["."])  # the integrator owns the whole integration worktree
 
 
 def test_report_collects_sections_and_cost_by_role(repo):
