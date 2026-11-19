@@ -12,3 +12,4 @@ __pycache__/
 ui/node_modules/
 ui/test-results/
 ui/playwright-report/
+evals/results/

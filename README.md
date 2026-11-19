@@ -1,8 +1,14 @@
-# swarm — multi-agent swarms for Claude Code
+# todo — multi-agent `/todo` for Claude Code (Antigravity's `/swarm`)
 
 A coordinator splits a big task across **named, persistent workers**. Each worker is its own Claude session in its own git worktree, can only write inside the paths it owns, and costs nothing while idle. A **read-only verifier** checks every `done`, a **monitor** catches hung or looping workers, and everything is visible on a **live message board** (CLI, MCP tools and a web UI).
 
 Modelled on the behaviour described for Google Antigravity's `/swarm` (coordinator, named workers, verifier, monitor, shared board). Antigravity 1.22.2 contains no `/swarm` code, so the verifier, monitor and board here are our own design from that description. See `DESIGN.md`.
+
+## Run report
+`swarm report` (also the **Run report** panel in the UI, or `GET /report`) shows, after or during a run: budget and cost by role, each worker's planned paths vs the files its branch actually changed (scope drift is flagged), the coordinator's recorded decisions, research findings with sources, critic findings, verifier verdicts, monitor actions with the rule that fired, and recent denied tool calls.
+
+## Evals
+`swarm eval` compares one agent against the swarm modes (`single`, `swarm`, `swarm+research`, `swarm+critics`, `swarm+all`) on fixed tasks in `evals/tasks/`, scored by hidden tests the agents never see. It spends real money, so it is a dry run (it prints the run count and worst-case spend) until you add `--yes`. Example: `swarm eval --task textkit --mode single --mode swarm --repeat 3 --max-cost 2 --yes`; results land in `evals/results/`.
 
 ## Requirements
 - Claude Code (tested with 2.1.326) signed in; headless workers use the same auth (`claude auth login` / `claude setup-token`)
@@ -13,15 +19,15 @@ Modelled on the behaviour described for Google Antigravity's `/swarm` (coordinat
 As a plugin (from a local clone or any git URL):
 ```
 /plugin marketplace add /path/to/gswan
-/plugin install swarm@gswan
+/plugin install todo@gswan
 ```
 Or try it without installing: `claude --plugin-dir /path/to/gswan`.
 
-The plugin adds: the `/swarm:swarm` skill, the `swarm` MCP server, and two hooks (env warm-up on session start; a Stop hook that keeps the coordinator from finishing while tasks are unverified). The first session after install runs `uv sync` in the background; if the server is not up yet, run `/mcp` once and reconnect.
+The plugin adds: the `/todo:todo` skill, the `swarm` MCP server, and two hooks (env warm-up on session start; a Stop hook that keeps the coordinator from finishing while tasks are unverified). The first session after install runs `uv sync` in the background; if the server is not up yet, run `/mcp` once and reconnect.
 
 ## Use
 ```
-/swarm:swarm Build a todo CLI with tests: storage, commands, and docs as separate parts
+/todo:todo Build a todo CLI with tests: storage, commands, and docs as separate parts
 ```
 The coordinator will: start a swarm, define workers with disjoint owned paths, wake them in parallel, wait, react to `blocked` events, then call `merge_workers`, which merges every verified worker branch into `swarm/<swarmId>/integration` in its own worktree (your checked-out branch is never touched). A conflict is handed to an `integrator` worker, which is verified like any other. When it reports `allMerged`, apply the result yourself:
 ```
@@ -51,7 +57,7 @@ Cards per worker (status, task, monitor warnings, activity, cost), the live boar
 | Board | SQLite event log (`.swarm/swarm.db`), mirrored to `.swarm/board.md`; secrets are redacted before storage. |
 | Stop hook | Blocks the coordinator (max 3 times) while any task is not `done`/`escalated`. |
 
-MCP tools (coordinator): `swarm_start`, `define_worker`, `invoke_worker` (non-blocking), `wait_for_workers` (≤110 s, call again if `timedOut`), `merge_workers`, `swarm_status`, `board_post`, `board_digest`.
+MCP tools (coordinator): `swarm_start` (`critics=true` adds diff critics), `define_worker`, `define_researcher` (read-only web/repo research with cited `research` events), `critique_plan` (read-only plan critic),  `invoke_worker` (non-blocking), `wait_for_workers` (≤110 s, call again if `timedOut`), `merge_workers`, `swarm_status`, `board_post`, `board_digest`.
 
 CLI: `swarm init|post|show|tail|digest|stale|export|tasks|limits|mention|integrate|monitor|serve`, `swarm worker define|list|invoke`, `swarm verdict` (verifier role only; `--force` for humans).
 
@@ -60,6 +66,7 @@ CLI: `swarm init|post|show|tail|digest|stale|export|tasks|limits|mention|integra
 |---|---|---|
 | `SWARM_HOME` | nearest `.swarm/`, else git root, else cwd | project root |
 | `SWARM_VERIFIER_MODEL` | `sonnet` | model for verifiers |
+| `SWARM_CRITIC_MODEL` | off | model for diff critics on every swarm (or pass `critics=true` at swarm_start) |
 | `SWARM_MONITOR` | `1` | `0` disables the monitor thread |
 | `SWARM_MONITOR_INTERVAL` | `15` | seconds between monitor checks |
 | `SWARM_MONITOR_LLM` | off | `1` enables the Haiku stall judge |

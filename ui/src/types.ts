@@ -1,5 +1,5 @@
-export type EventKind = "plan" | "claim" | "update" | "blocked" | "done" | "verify" | "nudge" | "mention" | "human";
-export const EVENT_KINDS: EventKind[] = ["plan", "claim", "update", "blocked", "done", "verify", "nudge", "mention", "human"];
+export type EventKind = "plan" | "claim" | "update" | "blocked" | "done" | "verify" | "nudge" | "mention" | "human" | "research" | "critique" | "decision";
+export const EVENT_KINDS: EventKind[] = ["plan", "claim", "update", "blocked", "done", "verify", "nudge", "mention", "human", "research", "critique", "decision"];
 
 export interface BoardEvent {
   seq: number;

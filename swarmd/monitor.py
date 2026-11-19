@@ -159,7 +159,8 @@ class Monitor:
                     f.action = "extend"; out.append(f); continue
             if f.state in ("hung", "looping"):
                 if st["nudges"] == 0:
-                    self._post("nudge", f"{f.worker} {f.state}: {f.detail}. If it does not recover it will be restarted.")
+                    self._post("nudge", f"{f.worker} {f.state}: {f.detail}. If it does not recover it will be restarted. "
+                                    f"[rule: stall_s={self.th.stall_s:g} loop_tools={self.th.loop_tools} loop_posts={self.th.loop_posts} grace_s={self.th.grace_s:g}]")
                     self.reg.mon_set(f.worker, nudges=1, restarts=st["restarts"], last_action=stamp); f.action = "nudge"
                 elif st["restarts"] < self.th.max_restarts:
                     self._restart(w, f)

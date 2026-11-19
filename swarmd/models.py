@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 EventKind = Literal[
-    "plan", "claim", "update", "blocked", "done", "verify", "nudge", "mention", "human"
+    "plan", "claim", "update", "blocked", "done", "verify", "nudge", "mention", "human", "research", "critique", "decision"
 ]
 EVENT_KINDS: tuple[str, ...] = EventKind.__args__  # type: ignore[attr-defined]
 SYSTEM_AGENTS = frozenset({"coordinator", "monitor", "verifier", "human", "swarmd"})
@@ -111,7 +111,7 @@ class Worker(CamelModel):
     cost_usd: float = 0.0
     last_error: str | None = None
     pid: int | None = None
-    role: Literal["worker", "verifier"] = "worker"
+    role: Literal["worker", "verifier", "researcher", "critic"] = "worker"
     base_sha: str | None = None
     cwd: str | None = None  # verifier: the worktree it inspects
     last_activity: str | None = None  # last stream-json line seen from the running turn

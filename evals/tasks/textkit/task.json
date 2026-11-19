@@ -1,0 +1,7 @@
+{
+  "id": "textkit",
+  "prompt": "Create a small Python package `textkit` (directory textkit/ with __init__.py) with three independent modules, each with unittest tests in tests/ (run with `python3 -m unittest discover -s tests`).\n1. textkit/slugify.py: slugify(s: str) -> str. Lowercase, strip accents (NFKD, ASCII only), every run of non-alphanumeric characters becomes a single '-', no leading/trailing '-'. 'Hello, World!' -> 'hello-world'; '  Crème Brûlée ' -> 'creme-brulee'; '' -> ''.\n2. textkit/wrap.py: wrap(text: str, width: int) -> list[str]. Greedy word wrap on whitespace; a word longer than width is split into width-sized chunks; width < 1 raises ValueError; empty text -> [].\n3. textkit/truncate.py: truncate(s: str, n: int, suffix: str = '…') -> str. If len(s) <= n return s; n <= 0 raises ValueError; if n < len(suffix) return suffix[:n]; otherwise s[:n-len(suffix)] + suffix (result is never longer than n).\nExport all three functions from textkit/__init__.py.",
+  "tools": ["Bash(python3:*)"],
+  "check": "unittest",
+  "timeout_s": 1800
+}

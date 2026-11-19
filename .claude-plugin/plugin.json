@@ -1,12 +1,13 @@
 {
-  "name": "swarm",
+  "name": "todo",
   "version": "0.1.0",
-  "description": "Multi-agent swarm for Claude Code: a coordinator splits a task across named, persistent workers (own git worktrees, enforced file ownership), with a read-only verifier gate, a stall/loop monitor, a live shared message board and a web UI.",
+  "description": "Multi-agent /todo for Claude Code (an equivalent of Antigravity's /swarm): a coordinator splits a task across named, persistent workers (own git worktrees, enforced file ownership), with a read-only verifier gate, a stall/loop monitor, a live shared message board and a web UI.",
   "author": {
     "name": "gswan"
   },
   "keywords": [
     "multi-agent",
+    "todo",
     "swarm",
     "orchestration",
     "subagents",

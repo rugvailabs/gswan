@@ -1,4 +1,6 @@
-# gswan — Full /swarm for Claude Code (design v1)
+# gswan — `/todo` for Claude Code (Antigravity's `/swarm`; design v1, extended 2026-11-19)
+
+Naming: user-facing command/plugin is **todo** (`/todo:todo`, CLI alias `todo`). Internals keep `swarm`/`swarmd`/`.swarm/` to avoid breaking existing runs and branch names (`swarm/<id>/*`).
 
 Status: design, 2026-11-17. Source of truth is the user's description of Google Antigravity `/swarm`
 (REA found no swarm code in Antigravity 1.22.2; only the subagent layer). Anything marked **[ours]** is our own design.
@@ -98,3 +100,44 @@ Python 3.12 + FastAPI + Pydantic + SQLite; MCP via official Python SDK; UI React
 - `gswan` is not a git repo; worktrees require `git init` (or per-worker directory copies).
 - Cost: N workers + verifier multiplies tokens; mitigate with digests, small worker counts, cheaper model for monitor/verifier.
 - If a newer Antigravity build exposes real `/swarm` internals, diff against this design (esp. board schema, @mention semantics).
+
+## 8. Extension: research, critics, transparency, evals (S8-S11)
+
+Goal: more capable (agents that find facts and attack weak work), more transparent (every decision explainable), and measurable.
+New roles reuse the worker registry, runner, board and limits. Roles: `worker`, `verifier`, `researcher`, `critic`.
+
+### S8 Research agents (done: core)
+- `researcher` role: read-only (Read/Glob/Grep/WebSearch/WebFetch), runs in the project root, no task, no worktree, no verifier gate, not counted against `max_workers`; own cap of 4 per swarm; still counted in wake-ups and cost.
+- Output is board kind `research`: `claim | https://url | "verbatim quote"`, or `UNVERIFIED: ...`. `swarm post` rejects a research post without a URL (or UNVERIFIED) and rejects the kind from non-researchers.
+- Safety: web/repo content is data, never instructions (charter says so). Researchers cannot write, cannot mention workers, Bash is read-only (shared `READ_ONLY_ROLES` in `bashpolicy.py`). The coordinator decides what reaches a writing worker, and passes it in the brief.
+- Tools: `define_researcher(name, question)`, then `invoke_worker`. Skill step 3 (optional).
+- Open: **citation spot-check** (a verifier re-fetches N quotes and fails the finding if the quote is absent); research-aware `board_digest`.
+
+### S9 Critic agents (done: plan critic, diff critics, gating; open: dispute flow)
+Verifier asks "does it meet the task" after the work. Critics attack the work and the plan.
+- **Plan critic**: read-only, runs after the coordinator's plan and before any worker is invoked. Checks missing requirements, overlapping ownership, risky assumptions, untestable goals. Output: findings with severity.
+- **Diff critic**: one per worker (personas: correctness, security, tests/maintainability; cheap model for nits). Receives the task + `git diff <base>`, NOT the worker's reasoning. Runs before the verifier so the verifier sees fixed work.
+- Severity `blocker | major | nit`. Only blockers gate (worker gets them like a failed verdict); majors/nits are posted (`critique` kind) and listed in the report. Max 2 critic rounds per task, then escalate (same ladder as the verifier).
+- Anti-ping-pong: a finding must name file:line and a concrete failure; the worker may answer `disputed: <reason>`, which goes to the verifier to arbitrate; per-role budget so critics cannot eat the worker budget.
+- Different from workers by model/prompt/inputs, otherwise they echo the worker.
+
+- Built: `critics.py` (findings table, rounds, severity), role `critic` (Read/Glob/Grep + read-only git), `swarm critique <target> blocker|major|nit|ok "reason" --at file:line` (critic-only; blocker/major need file:line), gate runs persona critics in parallel before the verifier when `critics=true` at `swarm_start` or `SWARM_CRITIC_MODEL` is set (default off), blockers -> worker without spending a verifier round, after 2 rounds unresolved blockers go to the verifier brief. MCP `critique_plan`. Not built: `disputed:` replies, per-role budgets.
+
+### S10 Transparency (done except per-worker diff view and replay timeline)
+- Provenance on events: agent, session, the tool calls behind a claim (`refs`), cost of the turn.
+- `decision` board kind: coordinator records why it split/merged/escalated/skipped a critic finding.
+- Plan-vs-actual per worker: owned paths vs files changed, goal vs verdict; scope drift flagged.
+- Monitor explainability: every nudge/kill records the signal and thresholds that triggered it.
+- UI: per-worker diff view with critic/verifier verdicts, researcher findings panel with source links, denied.log, cost by role, replay timeline; `swarm report` exports a markdown run report.
+
+- Built: `swarmd/report.py` + `swarm report [--out] [--json]` + `GET /report` + UI "Run report" panel: budget, cost by role, plan-vs-actual per worker (git diff base..branch vs `owns`, scope drift flagged), decisions, research, critic findings, verdicts, monitor actions (nudges now include the rule/thresholds that fired), denied-call tail. `decision` board kind (coordinator logs why). Worker reply events carry provenance refs `cost:`, `turn:`, `session:`. Not built: per-worker diff viewer in the UI, replay timeline.
+
+### S11 Eval harness (done: harness + 2 tasks, validated offline; no real run yet)
+- 5-10 fixed tasks in `evals/` (each: repo fixture, prompt, deterministic check). `swarm eval` runs single-agent vs swarm vs swarm+research+critics and records pass rate, cost, wall time, escalations.
+- Run on every change to roles/prompts/limits. No new role ships without showing it moves a number or the report says so.
+
+- Built: `swarmd/evals.py`, `swarm eval [--task] [--mode] [--repeat] [--max-cost] [--yes]` (dry run without --yes, prints worst-case spend). `evals/tasks/<id>/{task.json,repo/,check/,reference/}`: agents see only `repo/`; `check/` (hidden unittest) is copied in after the run; `reference/` proves the check passes a correct solution and fails the starting repo (tested). Modes: single, swarm, swarm+research, swarm+critics, swarm+all. For swarm modes the harness (not the coordinator) applies the integration branch, and cost = coordinator + all agents' `cost_usd`. Tasks: textkit (3 independent modules), inventory-bugs (fix deviations from a spec). Results go to `evals/results/` (gitignored).
+- Caveats: 2 tasks x 1 run is an anecdote; use `--repeat 3+` and add tasks before drawing conclusions. The headless `claude -p /todo:todo` invocation and the `mcp__plugin_todo_swarm` allow-list name are unverified against a real run.
+
+### Risks
+Cost multiplication (per-role budgets), critic loops (hard caps, blocker-only gate), prompt injection via research (read-only + data-only + coordinator filter), board noise (collapse by kind, digest), same-model blind spots (diversify model/prompt/input).

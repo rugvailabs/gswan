@@ -69,11 +69,12 @@ class SwarmTools:
 
     # ---- coordinator tools ----------------------------------------------------
     def swarm_start(self, task: str, max_workers: int | None = None, max_wakeups: int | None = None,
-                    max_wall_s: int | None = None, max_cost_usd: float | None = None) -> dict:
+                    max_wall_s: int | None = None, max_cost_usd: float | None = None, critics: bool = False) -> dict:
         """Start a swarm. Budgets default to 6 workers / 40 wake-ups / 3600s / $10; only a human can raise them later."""
         sw = self.board.start_swarm(task, limits={"max_workers": max_workers, "max_wakeups": max_wakeups,
                                                    "max_wall_s": max_wall_s, "max_cost_usd": max_cost_usd})
         self.threads.clear(); self.last.clear(); self.cursor = 0
+        self.gate.critic_model = os.environ.get("SWARM_CRITIC_MODEL") or ("sonnet" if critics else None)  # per-worker diff critics before the verifier
         return {"ok": True, "swarmId": sw.id, "task": sw.task, **self.runner.limits.snapshot()}
 
     def define_worker(self, name: str, goal: str, owns: list[str], tools: list[str] | None = None,
@@ -83,6 +84,29 @@ class SwarmTools:
         except (ValueError, WorkerError, NoActiveSwarm) as e:
             return self._err(e)
         return {"ok": True, "worker": w.name, "id": w.id, "owns": w.owns}
+
+    def critique_plan(self, plan: str, model: str = "sonnet") -> dict:
+        """Start a read-only plan critic on your plan BEFORE invoking workers. Findings arrive as `critique` events on target `plan`."""
+        from .critics import Critiques
+        try:
+            c = self.runner.reg.define_critic("plan-critic", "plan: missing requirements, overlapping ownership, risky assumptions, untestable goals", model=model)
+            n = Critiques(self.board).begin_round("plan")
+        except (ValueError, WorkerError, NoActiveSwarm) as e:
+            return self._err(e)
+        ws = "; ".join(f"{w.name} (owns {', '.join(w.owns)}): {w.goal}" for w in self.runner.reg.list()) or "(none defined yet)"
+        brief = (f"Critique this plan before work starts. Target for your findings: plan (round {n}). No file:line needed.\n"
+                 f"Task: {self.board._require().task}\nPlan:\n{plan}\nDefined workers: {ws}\n"
+                 f"Check: requirements missing, workers whose owned paths overlap, assumptions about the repo you can verify by reading it, "
+                 f"goals that cannot be verified, interfaces between workers left undefined.")
+        return self.invoke_worker(c.name, brief, sender="coordinator")
+
+    def define_researcher(self, name: str, question: str, model: str = "sonnet") -> dict:
+        """Read-only research agent (repo + web). Wake it with invoke_worker; findings arrive as `research` board events."""
+        try:
+            w = self.runner.define_researcher(name, question, model)
+        except (ValueError, WorkerError, NoActiveSwarm) as e:
+            return self._err(e)
+        return {"ok": True, "researcher": w.name, "id": w.id}
 
     def invoke_worker(self, name: str, message: str, sender: str = "coordinator") -> dict:
         """@mention a worker. Returns immediately; the turn runs in the background."""
@@ -109,7 +133,7 @@ class SwarmTools:
         """Block until the named workers (default: all) are idle with empty queues, or timeout."""
         timeout = max(1.0, min(float(timeout_s), MAX_WAIT))
         try:
-            targets = names or [w.name for w in self.runner.reg.list()]
+            targets = names or [w.name for w in self.runner.reg.list() + self.runner.reg.list_researchers() + self.runner.reg.list_critics()]
         except NoActiveSwarm as e:
             return self._err(e)
         deadline = time.time() + timeout
@@ -153,7 +177,7 @@ class SwarmTools:
 
     def swarm_status(self) -> dict:
         try:
-            ws = [self._worker_view(w) for w in self.runner.reg.list()]
+            ws = [self._worker_view(w) for w in self.runner.reg.list() + self.runner.reg.list_researchers() + self.runner.reg.list_critics() if w.name == "plan-critic" or w.role != "critic"]
             unsettled = [t.worker for t in self.tasks.unsettled()]
             return {"ok": True, **{k: v for k, v in self.runner.limits.snapshot().items()}, "allTasksSettled": not unsettled, "unsettled": unsettled, "workers": ws, "stale": [s.model_dump(by_alias=True) for s in self.board.stale(10)],
                     "monitor": [{"worker": f.worker, "state": f.state, "detail": f.detail} for f in self.monitor.check()],
@@ -192,6 +216,12 @@ def build_server(tools: SwarmTools, role: str = "coordinator") -> MCPServer:
         srv.add_tool(tools.define_worker, name="define_worker", description=(
             "Register a named worker: goal, owns (paths it may write, relative to its own git worktree; must not overlap "
             "other workers), optional extra allowed tools like 'Bash(pytest:*)', model (sonnet|haiku|opus)."))
+        srv.add_tool(tools.critique_plan, name="critique_plan", description=(
+            "Run a read-only plan critic on your plan before invoking workers (wait_for_workers, then read `critique` events and fix the plan). "
+            "Pass critics=true to swarm_start to also have diff critics (correctness/security/tests) review each worker before the verifier."))
+        srv.add_tool(tools.define_researcher, name="define_researcher", description=(
+            "Register a read-only research agent (repo + web, cites sources). `question` is one focused question. Wake it with "
+            "invoke_worker; it posts `research` events. Max 4 per swarm. Use before planning or when a worker is blocked on facts."))
         srv.add_tool(tools.invoke_worker, name="invoke_worker", description=(
             "@mention a worker with a message. Non-blocking; wakes the worker's persistent session (zero cost while idle). "
             "Mentions sent while it is busy are queued and merged."))
@@ -211,7 +241,8 @@ def main() -> int:
     ensure_swarm_dir(root)
     board = open_board(root)
     runner = Runner(board, root)
-    tools = SwarmTools(board, runner, Gate(runner, verifier_model=os.environ.get("SWARM_VERIFIER_MODEL", "sonnet")))
+    tools = SwarmTools(board, runner, Gate(runner, verifier_model=os.environ.get("SWARM_VERIFIER_MODEL", "sonnet"),
+                                           critic_model=os.environ.get("SWARM_CRITIC_MODEL") or None))
     if os.environ.get("SWARM_MONITOR_LLM") == "1":
         from .monitor import claude_judge
         tools.monitor.judge = claude_judge(runner.claude_bin)

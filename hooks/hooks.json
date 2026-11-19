@@ -1,5 +1,5 @@
 {
-  "description": "Swarm: warm the Python env on session start; block the coordinator from finishing while worker tasks are unverified",
+  "description": "todo: warm the Python env on session start; block the coordinator from finishing while worker tasks are unverified",
   "hooks": {
     "SessionStart": [
       {

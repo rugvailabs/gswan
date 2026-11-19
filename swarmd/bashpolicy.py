@@ -29,6 +29,9 @@ _REDIRECT_OK = re.compile(r"(?<=\s)(?:\d?>&\d|\d?>>?\s?/dev/null|&>\s?/dev/null)
 _ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
 
 
+READ_ONLY_ROLES = ("verifier", "researcher", "critic")
+
+
 class Denied(Exception):
     pass
 
@@ -150,8 +153,8 @@ def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: li
                 raise Denied("sort -o writes files")
             continue
         if prog in WRITE_PROGS:
-            if role == "verifier":
-                raise Denied("verifiers are read-only")
+            if role in READ_ONLY_ROLES:
+                raise Denied("verifiers and researchers are read-only")
             for a in (x for x in words[1:] if not x.startswith("-")):
                 if not _inside(os.path.join(cur, a), worktree):
                     raise Denied(f"{prog} outside your worktree: {a}")
@@ -174,8 +177,8 @@ def _check_git(words: list[str], role: str, cur: str, worktree: str, branch_pref
         if sub == "branch" and any(not a.startswith("-") or a in ("-d", "-D", "-m", "-M", "--delete") for a in args):
             raise Denied("git branch is read-only here (list only)")
         return
-    if role == "verifier":
-        raise Denied(f"verifiers are read-only: git {sub} is not allowed")
+    if role in READ_ONLY_ROLES:
+        raise Denied(f"read-only role: git {sub} is not allowed")
     if sub in GIT_WRITE:
         if sub == "add":
             for a in (x for x in args if not x.startswith("-")):

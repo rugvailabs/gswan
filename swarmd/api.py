@@ -106,6 +106,12 @@ def create_app(board: Board, token: str | None = None, tools=None, ui_dir: Path 
     def digest(since_seq: int = Query(0, alias="sinceSeq", ge=0)) -> Digest:
         return board.digest(since_seq)
 
+    @app.get("/report", dependencies=guard)
+    def run_report(format: str = Query("json", pattern="^(json|markdown)$")):
+        from . import report
+        d = report.build(board, board.db_path.parent.parent)
+        return {"markdown": report.markdown(d)} if format == "markdown" else d
+
     @app.get("/stale-workers", response_model=list[StaleWorker], dependencies=guard)
     def stale(minutes: float = Query(10, gt=0)) -> list[StaleWorker]:
         return board.stale(minutes)

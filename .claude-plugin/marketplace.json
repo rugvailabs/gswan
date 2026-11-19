@@ -1,14 +1,14 @@
 {
   "name": "gswan",
-  "description": "Multi-agent swarms for Claude Code: coordinator, persistent workers, verifier gate, monitor and live board.",
+  "description": "Multi-agent /todo (Antigravity's /swarm equivalent) for Claude Code: coordinator, persistent workers, verifier gate, monitor and live board.",
   "owner": {
     "name": "gswan"
   },
   "plugins": [
     {
-      "name": "swarm",
+      "name": "todo",
       "source": "./",
-      "description": "Coordinator + named persistent workers + verifier gate + monitor + live board for Claude Code",
+      "description": "/todo: coordinator + named persistent workers + verifier gate + monitor + live board for Claude Code",
       "version": "0.1.0"
     }
   ]

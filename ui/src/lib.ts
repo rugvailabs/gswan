@@ -35,9 +35,13 @@ export function eventTone(e: Pick<BoardEvent, "kind" | "body">): "ok" | "bad" | 
       return "bad";
     case "verify":
       return e.body.startsWith("pass") ? "ok" : "bad";
+    case "critique":
+      return e.body.startsWith("blocker") ? "bad" : e.body.startsWith("ok") ? "ok" : "warn";
     case "nudge":
       return "warn";
     case "mention":
+    case "research":
+    case "decision":
       return "info";
     case "human":
       return "human";

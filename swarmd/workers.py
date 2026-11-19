@@ -80,6 +80,44 @@ class Registry:
                        "verifier", w.cwd, now, now))
         return w
 
+    MAX_RESEARCHERS = 4  # per swarm; researchers cost tokens but are not workers, so they have their own cap
+
+    def define_researcher(self, name: str, goal: str, model: str = "sonnet") -> Worker:
+        """Read-only research agent: reads the repo and the web, posts `research` findings with sources. No task, no
+        worktree, no verifier gate (it changes nothing). Runs in the project root."""
+        sw = self.b._require()
+        WorkerSpec(name=name, goal=goal, owns=["-"], model=model)  # reuse name/goal validation
+        now = utc_now()
+        w = Worker(id=new_id("wrk"), swarm_id=sw.id, name=name, goal=goal, owns=[], tools=[], model=model,
+                   session_id=str(uuid.uuid4()), status="idle", role="researcher", created_at=now, updated_at=now)
+        with self.b._conn() as c:
+            if c.execute("SELECT 1 FROM workers WHERE swarm_id=? AND name=?", (sw.id, name)).fetchone():
+                raise WorkerError(f"'{name}' already exists in this swarm")
+            n = c.execute("SELECT COUNT(*) FROM workers WHERE swarm_id=? AND role='researcher'", (sw.id,)).fetchone()[0]
+            if n >= self.MAX_RESEARCHERS:
+                raise WorkerBudgetError(f"researcher limit reached ({n}/{self.MAX_RESEARCHERS})")
+            c.execute("INSERT INTO workers (id,swarm_id,name,goal,owns,tools,model,session_id,status,role,created_at,updated_at)"
+                      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (w.id, sw.id, name, goal, "[]", "[]", model, w.session_id, "idle", "researcher", now, now))
+        return w
+
+    def define_critic(self, name: str, goal: str, cwd: str | None = None, model: str = "sonnet") -> Worker:
+        """Read-only critic. Diff critics inspect a worker's worktree (cwd); the plan critic reads the project root."""
+        sw = self.b._require()
+        WorkerSpec(name=name, goal=goal, owns=["-"], model=model)  # reuse name/goal validation
+        try:
+            return self.get(name)
+        except WorkerError:
+            pass
+        now = utc_now()
+        w = Worker(id=new_id("wrk"), swarm_id=sw.id, name=name, goal=goal, owns=[], tools=[], model=model,
+                   session_id=str(uuid.uuid4()), status="idle", role="critic", cwd=cwd, created_at=now, updated_at=now)
+        with self.b._conn() as c:
+            c.execute("INSERT INTO workers (id,swarm_id,name,goal,owns,tools,model,session_id,status,role,cwd,created_at,updated_at)"
+                      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (w.id, sw.id, name, goal, "[]", "[]", model, w.session_id, "idle", "critic", cwd, now, now))
+        return w
+
     def set_cwd(self, w: Worker, cwd: str | None) -> None:
         with self.b._conn() as c:
             c.execute("UPDATE workers SET cwd=? WHERE id=?", (cwd, w.id))
@@ -95,6 +133,12 @@ class Registry:
         if r is None:
             raise WorkerError(f"no worker named '{name}' in the active swarm")
         return _worker(r)
+
+    def list_researchers(self) -> list[Worker]:
+        return [w for w in self.list(include_verifiers=True) if w.role == "researcher"]
+
+    def list_critics(self) -> list[Worker]:
+        return [w for w in self.list(include_verifiers=True) if w.role == "critic"]
 
     def list(self, include_verifiers: bool = False) -> list[Worker]:
         sw = self.b._require()

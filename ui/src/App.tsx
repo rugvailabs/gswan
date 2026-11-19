@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { BoardFeed } from "./components/BoardFeed";
 import { Header } from "./components/Header";
 import { MentionBox } from "./components/MentionBox";
+import { ReportPanel } from "./components/ReportPanel";
 import { WorkerCards } from "./components/WorkerCards";
 import { useStore } from "./store";
 
@@ -21,7 +22,8 @@ export function App() {
         </div>
       )}
       <WorkerCards />
-      <div className="grid flex-1 gap-4 lg:grid-cols-[1fr_20rem]">
+      <ReportPanel />
+      <div className="grid flex-1 grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <BoardFeed />
         <MentionBox />
       </div>

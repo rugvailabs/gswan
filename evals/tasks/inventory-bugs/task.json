@@ -1,0 +1,7 @@
+{
+  "id": "inventory-bugs",
+  "prompt": "inventory.py does not match the spec in README.md. Find and fix every deviation (there are several, in different methods), and add unittest tests in tests/ that cover each fix (run with `python3 -m unittest discover -s tests`). Do not change the public API.",
+  "tools": ["Bash(python3:*)"],
+  "check": "unittest",
+  "timeout_s": 1200
+}

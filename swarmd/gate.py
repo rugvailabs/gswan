@@ -2,7 +2,10 @@
 failures go back to the worker (max MAX_ROUNDS), then escalate to the human."""
 from __future__ import annotations
 
+import threading
+
 from .board import Board
+from .critics import MAX_CRITIC_ROUNDS, PERSONAS, Critiques, fmt
 from .models import EventIn, TurnResult
 from .runner import Runner
 from .tasks import MAX_ROUNDS, Tasks
@@ -11,22 +14,24 @@ MAX_NO_VERDICT = 2  # verifier turns that end without a verdict before escalatin
 
 
 class Gate:
-    def __init__(self, runner: Runner, verifier_model: str = "sonnet"):
+    def __init__(self, runner: Runner, verifier_model: str = "sonnet", critic_model: str | None = None,
+                 personas: tuple[str, ...] = ("correctness", "security", "tests")):
         self.runner, self.board = runner, runner.board
         self.tasks, self.verifier_model = Tasks(runner.board), verifier_model
+        self.critic_model, self.personas, self.crit = critic_model, personas, Critiques(runner.board)  # critic_model None = critics off
 
     def invoke(self, name: str, message: str, sender: str = "coordinator") -> TurnResult:
         """@mention a worker, then verify/iterate until its task settles."""
         res = self.runner.invoke(name, message, sender=sender)
-        if res.queued_only or not res.ok:
-            return res
+        if res.queued_only or not res.ok or self.runner.reg.get(name).role != "worker":
+            return res  # researchers change nothing, so there is nothing to verify
         self.settle(name)
         return res
 
     def drain(self, name: str) -> TurnResult | None:
         """Run whatever is queued for a worker (e.g. peer mentions), then verify/iterate."""
         res = self.runner.run_queue(name)
-        if res is not None and res.ok:
+        if res is not None and res.ok and self.runner.reg.get(name).role == "worker":
             self.settle(name)
         return res
 
@@ -39,6 +44,16 @@ class Gate:
             if not self.tasks.set_status(name, "verifying", only_from=("awaiting_verification",)):
                 return  # someone else is verifying it
             target = self.runner.reg.get(name)
+            if self.critic_model and self.crit.rounds(name) < MAX_CRITIC_ROUNDS and target.worktree:
+                blockers = self.run_critics(target, t)
+                if blockers:  # the worker fixes them first; no verifier round is spent
+                    self.tasks.set_status(name, "failed")
+                    self.board.post(EventIn(agent="swarmd", kind="update",
+                                            body=f"{len(blockers)} critic blocker(s) on {name} (round {self.crit.rounds(name)}); sent back to the worker"))
+                    fix = self.runner.invoke(name, self.critic_fix_message(blockers), sender="critics")
+                    if not fix.ok or fix.queued_only:
+                        return
+                    continue  # worker posts `done` again -> awaiting_verification -> next critic round or verifier
             v = self.runner.reg.define_verifier(self.runner.reg.get(name), self.verifier_model)
             if not v.cwd:  # worktree path becomes known after the worker's first turn
                 self.runner.reg.set_cwd(v, target.worktree)
@@ -67,6 +82,30 @@ class Gate:
                     return
                 # worker posts `done` again -> task flips to awaiting_verification -> loop verifies again
 
+    def run_critics(self, target, t) -> list:
+        """One round: each persona critic reviews the worker's diff in parallel (read-only). Returns this round's blockers."""
+        rnd = self.crit.begin_round(target.name)
+        self.board.post(EventIn(agent="swarmd", kind="update", body=f"critics reviewing {target.name} (round {rnd}): {', '.join(self.personas)}"))
+        threads = []
+        for p in self.personas:
+            c = self.runner.reg.define_critic(f"critic-{target.name}-{p}", f"{p}: look for {PERSONAS[p]}", cwd=target.worktree, model=self.critic_model)
+            th = threading.Thread(target=self.runner.invoke, args=(c.name, self.critic_brief(target, t, p)), kwargs={"sender": "swarmd"}, daemon=True)
+            th.start(); threads.append(th)
+        for th in threads:
+            th.join()
+        return self.crit.blockers(target.name, rnd)
+
+    def critic_brief(self, w, t, persona: str) -> str:
+        prior = self.crit.list(w.name)
+        again = ("\nEarlier findings (check whether they are fixed; report only what is still wrong or newly wrong):\n" + fmt(prior)) if prior else ""
+        return (f"Critique worker '{w.name}'. Target for your findings: {w.name}\nGoal: {t.goal}\nOwned paths: {', '.join(w.owns)}\n"
+                f"Base commit: {w.base_sha or 'unknown'} (use `git diff {w.base_sha or 'HEAD~1'}`). Your focus: {persona} - {PERSONAS[persona]}.{again}")
+
+    @staticmethod
+    def critic_fix_message(blockers) -> str:
+        return ("Code critics found BLOCKERS. Fix each (or, if one is wrong, explain why in your done message with evidence), re-run your checks, "
+                "commit, then post `done` again:\n" + fmt(blockers))
+
     @staticmethod
     def fix_message(t) -> str:
         return ("Verification FAILED (round %d). Fix every item, re-run your checks, commit, then post `done` again:\n" % t.rounds
@@ -76,6 +115,8 @@ class Gate:
         done = [e for e in self.board.list_events(agent=w.name, kind="done", limit=500).items][-1:]
         summary = done[0].body if done else "(no done message found)"
         prior = f"\nPrevious failed reasons (check they are fixed): {' | '.join(t.reasons)}" if t.reasons else ""
+        open_b = self.crit.blockers(w.name, self.crit.rounds(w.name) or None) if self.critic_model else []
+        crit = f"\nUnresolved critic blockers from the last round (confirm each is fixed or wrong, fail if real): {' | '.join(f.location + ' ' + f.reason for f in open_b)}" if open_b else ""
         return (f"Verify worker '{w.name}' (task {t.id}).\nGoal: {t.goal}\nOwned paths: {', '.join(w.owns)}\n"
                 f"Base commit: {w.base_sha or 'unknown'} (use `git diff {w.base_sha or 'HEAD~1'}`).\n"
-                f"Worker's done message: {summary}{prior}\nGive your verdict with the board CLI `verdict {w.name} pass|fail`.")
+                f"Worker's done message: {summary}{prior}{crit}\nGive your verdict with the board CLI `verdict {w.name} pass|fail`.")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -53,6 +54,17 @@ def cmd_init(b: Board, a) -> int:
 
 def cmd_post(b: Board, a) -> int:
     body = a.message if a.message != "-" else sys.stdin.read().strip()
+    if a.kind == "critique":
+        print("error: use `swarm critique <target> <severity> <reason> --at file:line` so findings are structured", file=sys.stderr)
+        return 2
+    if a.kind == "research":
+        role = os.environ.get("SWARM_ROLE")
+        if role and role != "researcher":
+            print("error: only researchers post `research` events", file=sys.stderr)
+            return 3
+        if "UNVERIFIED" not in body and not re.search(r"https?://\S+", body):
+            print("error: a research finding needs a source URL (https://...) and a quote, or must start with UNVERIFIED:", file=sys.stderr)
+            return 2
     e = b.post(EventIn(agent=a.agent, kind=a.kind, body=body, task_id=a.task_id, refs=a.ref or []))
     print(f"#{e.seq} {e.id}")
     return 0
@@ -122,6 +134,60 @@ def cmd_verdict(b: Board, a) -> int:
     return 0
 
 
+def cmd_critique(b: Board, a) -> int:
+    from .critics import Critiques, CritiqueError
+    role = os.environ.get("SWARM_ROLE")
+    if role != "critic" and not a.force:
+        print("error: only critics post critiques (humans: pass --force)", file=sys.stderr)
+        return 3
+    who = os.environ.get("SWARM_WORKER") if role == "critic" else "human"
+    if a.severity == "ok":
+        b.post(EventIn(agent=who, kind="critique", body=f"ok {a.target}: {a.reason}"[:7900]))
+        print("recorded: no findings")
+        return 0
+    try:
+        f = Critiques(b).add(a.target, who, a.severity, a.reason, a.at or "")
+    except CritiqueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"finding {f.id}: {f.severity}")
+    return 0
+
+
+def cmd_eval(a, root: Path) -> int:
+    from . import evals
+    base = Path(a.dir) if a.dir else evals.PROJECT_ROOT / "evals"
+    tasks = evals.load_tasks(base, a.task)
+    modes = a.mode or list(evals.MODES)
+    bad = [m for m in modes if m not in evals.MODES]
+    if bad or not tasks:
+        print(f"error: {'unknown mode(s) ' + ', '.join(bad) if bad else 'no tasks found in ' + str(base / 'tasks')}", file=sys.stderr)
+        return 2
+    n, worst = evals.worst_case(tasks, modes, a.repeat, a.max_cost)
+    print(f"{len(tasks)} task(s) x {len(modes)} mode(s) x {a.repeat} = {n} real run(s); per-run cap ${a.max_cost:.2f} (swarm modes bill workers too); rough worst case ${worst:.0f}")
+    if not a.yes:
+        print("dry run: nothing executed. Re-run with --yes to spend that money.")
+        return 0
+    rep = evals.run_eval(base, tasks, modes, a.repeat, claude=os.environ.get("SWARM_CLAUDE_BIN", "claude"), model=a.model, max_cost=a.max_cost)
+    out = base / "results"; out.mkdir(exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    (out / f"{stamp}.json").write_text(rep.to_json()); (out / f"{stamp}.md").write_text(rep.markdown())
+    print(rep.markdown()); print(f"saved {out / (stamp + '.md')}")
+    return 0 if all(r.passed for r in rep.runs) else 1
+
+
+def cmd_report(b: Board, a, root: Path) -> int:
+    from . import report
+    d = report.build(b, root)
+    out = report.as_json(d) if a.json else report.markdown(d)
+    if a.out:
+        Path(a.out).write_text(out)
+        print(f"wrote {a.out}")
+    else:
+        print(out, end="")
+    return 0
+
+
 def cmd_monitor(b: Board, a, root: Path) -> int:
     from .gate import Gate
     from .monitor import Monitor, Thresholds
@@ -162,6 +228,12 @@ def cmd_limits(b: Board, a) -> int:
 def cmd_mention(b: Board, a, root: Path) -> int:
     from .runner import Runner
     role, sender = os.environ.get("SWARM_ROLE"), os.environ.get("SWARM_WORKER")
+    if role == "critic":
+        print("error: critics cannot mention workers; post `critique` findings", file=sys.stderr)
+        return 3
+    if role == "researcher":
+        print("error: researchers cannot mention workers; post your findings as `research` events", file=sys.stderr)
+        return 3
     if role == "verifier":
         print("error: verifiers cannot mention workers; give a verdict instead", file=sys.stderr)
         return 3
@@ -282,6 +354,15 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("verdict", help="verifier only: pass/fail a worker's task")
     s.add_argument("worker"); s.add_argument("verdict", choices=["pass", "fail"]); s.add_argument("--reason", action="append")
     s.add_argument("--force", action="store_true", help="human override")
+    s = sub.add_parser("critique", help="critic only: report a finding (blocker|major|nit) or `ok` on a worker or `plan`")
+    s.add_argument("target"); s.add_argument("severity", choices=["blocker", "major", "nit", "ok"]); s.add_argument("reason")
+    s.add_argument("--at", help="file:line (required for blocker/major on a worker)"); s.add_argument("--force", action="store_true")
+    s = sub.add_parser("eval", help="compare single agent vs swarm modes on fixed tasks (spends money: dry run unless --yes)")
+    s.add_argument("--task", action="append"); s.add_argument("--mode", action="append"); s.add_argument("--repeat", type=int, default=1)
+    s.add_argument("--max-cost", type=float, default=3.0, help="USD cap per run for the top-level agent"); s.add_argument("--model", default="sonnet")
+    s.add_argument("--dir", help="eval directory (default: evals/ in the plugin)"); s.add_argument("--yes", action="store_true")
+    s = sub.add_parser("report", help="run report: plan vs actual, decisions, research, critiques, verdicts, monitor actions, cost by role")
+    s.add_argument("--out"); s.add_argument("--json", action="store_true")
     sub.add_parser("tasks", help="task statuses")
     s = sub.add_parser("integrate", help="merge done worker branches into the integration branch; --apply merges that into your branch")
     s.add_argument("--no-auto", action="store_true", help="report conflicts but do not start the integrator")
@@ -309,8 +390,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if a.cmd == "serve":
             return cmd_serve(b, a, root)
+        if a.cmd == "report":
+            return cmd_report(b, a, root)
+        if a.cmd == "eval":
+            return cmd_eval(a, root)
         if a.cmd == "verdict":
             return cmd_verdict(b, a)
+        if a.cmd == "critique":
+            return cmd_critique(b, a)
         if a.cmd == "monitor":
             return cmd_monitor(b, a, root)
         if a.cmd == "integrate":

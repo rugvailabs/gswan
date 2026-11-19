@@ -1,12 +1,14 @@
-# gswan — /swarm for Claude Code
+# gswan — `/todo` for Claude Code (user-facing name `todo`; internals still `swarm`/`swarmd`/`.swarm/`)
+
+Plugin and skill are named `todo` (`/todo:todo <task>`); CLI also installed as `todo`. Do not rename `swarmd`, `.swarm/`, `SWARM_*` env vars or `swarm/<id>/*` branches without a migration.
 
 Goal: a Claude Code equivalent of Google Antigravity's `/swarm` (coordinator + named workers + verifier + monitor + live message board).
 
 ## Layout
-- Plugin (slice 7 done): `.claude-plugin/plugin.json` (+ `marketplace.json`), `skills/swarm/SKILL.md` (`/swarm:swarm <task>`), `hooks/hooks.json` (SessionStart uv warm-up, Stop gate), MCP server declared inline in plugin.json via `${CLAUDE_PLUGIN_ROOT}`. `README.md` is the user doc. Validate: `claude plugin validate .`. Old v1 subagent files and board.sh were deleted.
+- Plugin (slice 7 done): `.claude-plugin/plugin.json` (+ `marketplace.json`), `skills/todo/SKILL.md` (`/todo:todo <task>`), `hooks/hooks.json` (SessionStart uv warm-up, Stop gate), MCP server declared inline in plugin.json via `${CLAUDE_PLUGIN_ROOT}`. `README.md` is the user doc. Validate: `claude plugin validate .`. Old v1 subagent files and board.sh were deleted.
 - `swarmd/` — Python package (slice 1 done): `board.py` (SQLite event log), `api.py` (FastAPI + SSE), `cli.py` (`swarm` command), `models.py`, `redact.py`
 - `swarmd/workers.py` (registry + SQLite mention queue), `runner.py` (worktree + `claude -p --session-id/--resume`), `guard.py` (PreToolUse ownership hook) — slice 2 done. CLI: `swarm worker define|list|invoke`
-- `swarmd/mcp_server.py` + `.mcp.json` — MCP server `swarm` (tools: swarm_start, define_worker, invoke_worker [non-blocking], wait_for_workers [<=110s], swarm_status, board_post, board_digest; SWARM_ROLE=worker limits to board tools). `/swarm` skill is rewritten on these — slice 3 done. 
+- `swarmd/mcp_server.py` + `.mcp.json` — MCP server `swarm` (tools: swarm_start, define_worker, invoke_worker [non-blocking], wait_for_workers [<=110s], swarm_status, board_post, board_digest; SWARM_ROLE=worker limits to board tools). `/todo` skill is rewritten on these — slice 3 done. 
 - Verifier gate (slice 4 done): `tasks.py` (task per worker; `done` is provisional), `gate.py` (auto read-only `verify-<worker>` session in the worker's worktree; fail -> reasons back to worker, max 2 rounds then `escalated`), `stophook.py` + `.claude/settings.json` (Stop hook blocks the coordinator, max 3 times, while tasks are unsettled). CLI: `swarm verdict <worker> pass|fail --reason ...` (verifier role only, `--force` for humans), `swarm tasks`. Env `SWARM_VERIFIER_MODEL` (default sonnet).
 - Monitor (slice 5 done): `monitor.py` detects hung (no stream output `stall_s`), looping (identical tool calls / identical posts), forgot-to-report; ladder nudge -> kill+resume with restart prompt -> escalate, `grace_s` between rungs, progress resets. Runner now uses `claude -p --output-format stream-json --verbose` via `StreamingExecutor` (records activity + child pid; `kill_tree` kills the process group). Runs as a thread in the MCP server (`SWARM_MONITOR=0` disables, `SWARM_MONITOR_INTERVAL`) or `swarm monitor [--watch]`.
 - Web UI (slice 6 done): `ui/` = Vite + React 19 + TS strict + Tailwind 4 + Zustand. `cd ui && npm run build` then `uv run swarm serve` serves it at the printed URL (`?token=` from `.swarm/token`). API additions: `GET /status`, `POST /workers/{name}/mentions` (human @mention), static UI mount. UI shows header summary, worker cards (status/task/monitor/activity/cost), live board over SSE with kind/agent filters, @mention + board-note box. Tests: `npm test` (vitest, 14), `npm run e2e` (Playwright on system Chrome vs the real server with `ui/e2e/fake-claude.py`, 6). `SWARM_CLAUDE_BIN` overrides the claude binary. Dev: `npm run dev` proxies /api to :7777.
@@ -18,8 +20,10 @@ Goal: a Claude Code equivalent of Google Antigravity's `/swarm` (coordinator + n
 - Real runs need a git repo WITH a commit (worktrees); gswan itself has `git init` but no commit yet. Worker Bash is allowlist-only and single plain commands (compound/cd/&& are denied) — grant test commands per worker via `--tool 'Bash(pytest:*)'`.
 - Design: `DESIGN.md` (slices S1-S7). Spike results are in the memory dir.
 
+- Research agents (S8 done, DESIGN §8): role `researcher` (read-only, web, `research` events need a URL), `define_researcher` MCP tool, skill step 3. Critics (S9 core done): `critics.py`, role `critic`, `swarm critique`, Gate runs persona critics before the verifier when `critics=true`/`SWARM_CRITIC_MODEL`, MCP `critique_plan`. S11 eval harness built (`swarmd/evals.py`, `swarm eval`, `evals/tasks/*`; dry-run unless `--yes`; never run it without the user approving the spend). S10 transparency built (`report.py`, `swarm report`, `/report`, UI Run report panel, `decision` kind; no diff viewer/replay yet), S11 eval harness are designed in DESIGN.md §8, not built.
+
 ## Findings from REA on Antigravity 1.22.2
 No swarm/message-board code exists in that build. It has `define_subagent` / `invoke_subagent` (named subagents with own prompt sections and tools, own conversation, update forwarding). Verifier/monitor/board are our own design from the user's description.
 
 ## Conventions
-Workers never share files. Every "done" needs a verifier pass. Board kinds: plan, claim, update, blocked, done, verify, nudge.
+Workers never share files. Every "done" needs a verifier pass. Board kinds: plan, claim, update, blocked, done, verify, nudge, mention, human, research, critique.
