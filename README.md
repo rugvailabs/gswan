@@ -19,7 +19,7 @@ Modelled on the behaviour described for Google Antigravity's `/swarm` (coordinat
 As a plugin (from a local clone or any git URL):
 ```
 /plugin marketplace add /path/to/gswan
-/plugin install todo@gswan
+/plugin install todo@todo
 ```
 Or try it without installing: `claude --plugin-dir /path/to/gswan`.
 
