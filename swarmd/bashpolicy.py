@@ -25,7 +25,7 @@ WRITE_PROGS = {"mkdir", "touch"}  # every path argument must stay inside the wor
 GIT_READ = {"status", "diff", "log", "show", "rev-parse", "ls-files", "ls-tree", "branch", "blame", "shortlog"}
 GIT_WRITE = {"add", "commit"}
 GIT_MERGE_FLAGS = {"--no-edit", "--no-ff", "--ff", "--ff-only", "--no-commit"}
-_REDIRECT_OK = re.compile(r"(?<=\s)(?:\d?>&\d|\d?>>?\s?/dev/null|&>\s?/dev/null)(?=\s|$)")
+_REDIRECT_OK = re.compile(r"(?<=\s)(?:\d?>&\d|\d?>>?\s?/dev/null|&>\s?/dev/null)(?=[\s;|&]|$)")  # may be followed directly by ; | && (found by a real run: `ls 2>&1; git status`)
 _ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
 
 
