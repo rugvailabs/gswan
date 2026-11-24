@@ -224,3 +224,21 @@ def test_integrator_inherits_every_workers_checks(repo):
     integ = Integrator(Gate(r))
     wt, branch = integ.ensure()
     assert integ._integrator(wt, branch).checks == ["python3 -m pytest tests/a", "python3 -m pytest tests/b"]
+
+
+def test_auto_verifier_model_follows_diff_size():
+    from swarmd.gate import verifier_model_for
+    assert verifier_model_for(None)[0] == "sonnet"
+    assert verifier_model_for([("a.py", 50), ("README.md", 900)])[0] == "haiku"  # docs do not count
+    assert verifier_model_for([("a.py", 150), ("b.py", 60)])[0] == "sonnet"
+
+
+def test_auto_verifier_is_chosen_once_and_explicit_model_wins(repo):
+    board, r, ex, gate, tasks = setup(repo, [("fail", ["x"]), ("pass", ["ok"])])
+    gate.invoke("api", "go")
+    vcalls = [c[3] for c in ex.calls if c[0] == "verifier"]
+    assert len(vcalls) == 2 and all(c[c.index("--model") + 1] == "haiku" for c in vcalls)  # empty diff -> haiku, kept
+    assert any("verifier for api runs on haiku" in e.body for e in board.list_events().items)
+    g = Gate(r, verifier_model="opus")
+    r.define(WorkerSpec(name="ui", goal="build ui", owns=["src/ui"]))
+    assert g.verifier(r.reg.get("ui")).model == "opus"

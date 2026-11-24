@@ -12,7 +12,8 @@ from swarmd.runner import Exec
 
 ROOT = Path(evals.PROJECT_ROOT) / "evals"
 TASKS = {t.id: t for t in evals.load_tasks(ROOT)}
-OUT = json.dumps({"result": "done", "total_cost_usd": 0.5, "is_error": False})
+OUT = json.dumps({"result": "done", "total_cost_usd": 0.5, "is_error": False,
+                  "usage": {"input_tokens": 100, "output_tokens": 50, "cache_creation_input_tokens": 850, "cache_read_input_tokens": 9000}})
 
 
 def copy_reference(task, repo):
@@ -21,12 +22,12 @@ def copy_reference(task, repo):
 
 
 def test_tasks_are_discovered_and_well_formed():
-    assert set(TASKS) >= {"textkit", "inventory-bugs"}
+    assert set(TASKS) >= {"textkit", "inventory-bugs", "ledger"}
     for t in TASKS.values():
         assert t.prompt and (t.dir / "check").is_dir() and (t.dir / "reference").is_dir()
 
 
-@pytest.mark.parametrize("tid", ["textkit", "inventory-bugs"])
+@pytest.mark.parametrize("tid", ["textkit", "inventory-bugs", "ledger"])
 def test_hidden_check_accepts_reference_and_rejects_the_starting_repo(tid, tmp_path):
     t = TASKS[tid]
     start = evals.prepare(t, tmp_path / "start")
@@ -47,7 +48,7 @@ def test_single_mode_pass_and_fail(tmp_path):
     def good(cmd, cwd, env, timeout):
         calls.append(cmd); copy_reference(t, cwd); return Exec(0, OUT, "")
     r = evals.run_one(t, "single", tmp_path / "a", executor=good, claude="claude")
-    assert r.passed and r.cost_usd == 0.5 and r.escalations == 0
+    assert r.passed and r.cost_usd == 0.5 and r.escalations == 0 and r.tokens == 1000  # cache reads are not counted
     cmd = calls[0]
     assert "--max-budget-usd" in cmd and "--plugin-dir" not in cmd and "Bash(python3:*)" in cmd
 
@@ -56,7 +57,9 @@ def test_single_mode_pass_and_fail(tmp_path):
     assert not r.passed
 
 
-def fake_swarm(task, apply_reference=True, escalated=0):
+def fake_swarm(task, apply_reference=True, escalated=0, seen=None):
+    seen = [] if seen is None else seen
+
     def run(cmd, cwd, env, timeout):
         board = Board(cwd / ".swarm" / "swarm.db"); sw = board.start_swarm("x")
         wt = cwd / ".swarm" / "wt" / f"_integration-{sw.id}"
@@ -67,7 +70,9 @@ def fake_swarm(task, apply_reference=True, escalated=0):
             subprocess.run(["git", "-C", str(wt), "add", "-A"], check=True, capture_output=True)
             subprocess.run(["git", "-C", str(wt), "commit", "-qm", "work"], check=True, capture_output=True, env=env2)
         with board._conn() as c:
-            c.execute("INSERT INTO workers (id,swarm_id,name,goal,session_id,created_at,updated_at,cost_usd) VALUES ('w1',?,'a','g','s','t','t',1.25)", (sw.id,))
+            c.execute("INSERT INTO workers (id,swarm_id,name,goal,session_id,created_at,updated_at,cost_usd,tokens_in,tokens_out,tokens_cache_write,tokens_cache_read) "
+                      "VALUES ('w1',?,'a','g','s','t','t',1.25,200,300,500,70000)", (sw.id,))
+            seen.append(env.get("SWARM_TOKEN_CEILING"))
             c.execute("INSERT INTO tasks (id,swarm_id,worker,goal,status,created_at,updated_at) VALUES ('t1',?,'a','g',?, 't','t')", (sw.id, "escalated" if escalated else "done"))
         return Exec(0, OUT, "")
     return run
@@ -75,8 +80,10 @@ def fake_swarm(task, apply_reference=True, escalated=0):
 
 def test_swarm_mode_applies_integration_branch_and_sums_costs(tmp_path):
     t = TASKS["inventory-bugs"]
-    r = evals.run_one(t, "swarm+all", tmp_path / "s", executor=fake_swarm(t), plugin_dir=Path("/plug"))
+    seen = []
+    r = evals.run_one(t, "swarm+all", tmp_path / "s", executor=fake_swarm(t, seen=seen), plugin_dir=Path("/plug"), max_tokens=250000)
     assert r.passed and r.cost_usd == 1.75 and r.escalations == 0   # 0.5 coordinator + 1.25 workers
+    assert r.tokens == 1000 + 1000 and seen == ["250000"]  # coordinator + agents; the ceiling reaches the swarm
 
 
 def test_swarm_mode_counts_escalations_and_flags_missing_integration(tmp_path):
@@ -98,9 +105,9 @@ def test_report_summary_and_markdown():
     rep = evals.Report([evals.RunResult("t", "single", True, 0.4, 10), evals.RunResult("t", "single", False, 0.6, 20),
                         evals.RunResult("t", "swarm", True, 2.0, 60, escalations=1)])
     s = rep.summary()
-    assert s["single"] == {"runs": 2, "passRate": 0.5, "meanCostUsd": 0.5, "meanWallS": 15.0, "escalations": 0, "blocked": 0}
+    assert s["single"] == {"runs": 2, "passRate": 0.5, "meanTokens": 0, "meanCostUsd": 0.5, "meanWallS": 15.0, "escalations": 0, "blocked": 0}
     assert s["swarm"]["escalations"] == 1
-    assert "| single | 2 | 50% | $0.500 |" in rep.markdown() and json.loads(rep.to_json())["runs"][2]["mode"] == "swarm"
+    assert "| single | 2 | 50% | 0 | $0.500 |" in rep.markdown() and json.loads(rep.to_json())["runs"][2]["mode"] == "swarm"
 
 
 def test_cli_eval_is_a_dry_run_without_yes(capsys, tmp_path, monkeypatch):
@@ -108,5 +115,23 @@ def test_cli_eval_is_a_dry_run_without_yes(capsys, tmp_path, monkeypatch):
     before = sorted((ROOT / "results").glob("*")) if (ROOT / "results").exists() else []
     assert main(["eval", "--task", "textkit", "--mode", "single", "--mode", "swarm", "--repeat", "2"]) == 0
     out = capsys.readouterr().out
-    assert "4 real run(s)" in out and "dry run: nothing executed" in out and (sorted((ROOT / "results").glob("*")) if (ROOT / "results").exists() else []) == before
+    assert "4 real run(s)" in out and "dry run: nothing executed" in out and "worst case $30" in out  # 2 x $3 + 2 x ($3 + 1.5M tokens ~ $9) and (sorted((ROOT / "results").glob("*")) if (ROOT / "results").exists() else []) == before
     assert main(["eval", "--mode", "bogus"]) == 2
+
+
+def test_token_ceiling_caps_the_swarm_budget(tmp_path, monkeypatch):
+    from swarmd.limits import LimitsStore
+    board = Board(tmp_path / "b.db"); board.start_swarm("x", limits={"max_tokens": 5_000_000})
+    assert LimitsStore(board).get().max_tokens == 5_000_000
+    monkeypatch.setenv("SWARM_TOKEN_CEILING", "1500000")
+    assert LimitsStore(board).get().max_tokens == 1_500_000  # nobody inside the run can lift it
+    LimitsStore(board).set(max_tokens=9_000_000)
+    assert LimitsStore(board).get().max_tokens == 1_500_000
+    monkeypatch.setenv("SWARM_TOKEN_CEILING", "junk")
+    assert LimitsStore(board).get().max_tokens == 9_000_000
+
+
+def test_worst_case_uses_the_measured_token_rate():
+    ts = [TASKS["textkit"], TASKS["ledger"], TASKS["inventory-bugs"]]
+    n, worst = evals.worst_case(ts, ["single", "swarm", "swarm+all"], 2, 3.0, 1_500_000)
+    assert n == 18 and worst == 3 * 2 * (3.0 + 2 * (3.0 + 9.0))

@@ -346,7 +346,7 @@ def main() -> int:
     ensure_swarm_dir(root)
     board = open_board(root)
     runner = Runner(board, root)
-    tools = SwarmTools(board, runner, Gate(runner, verifier_model=os.environ.get("SWARM_VERIFIER_MODEL", "sonnet"),
+    tools = SwarmTools(board, runner, Gate(runner, verifier_model=os.environ.get("SWARM_VERIFIER_MODEL") or "auto",
                                            critic_model=os.environ.get("SWARM_CRITIC_MODEL") or None))
     if os.environ.get("SWARM_MONITOR_LLM") == "1":
         from .monitor import claude_judge

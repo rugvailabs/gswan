@@ -2,6 +2,7 @@
 Only a human raises limits (`swarm limits --set ...`); the coordinator can only choose them at swarm_start."""
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
@@ -30,7 +31,11 @@ class LimitsStore:
         sw = self.b._require()
         with self.b._conn() as c:
             r = c.execute("SELECT * FROM swarm_limits WHERE swarm_id=?", (sw.id,)).fetchone()
-        return Limits(**{k: r[k] for k in FIELDS}) if r else Limits()
+        lim = Limits(**{k: r[k] for k in FIELDS}) if r else Limits()
+        ceiling = os.environ.get("SWARM_TOKEN_CEILING", "")  # set by the eval harness: a hard cap nobody inside the run can lift
+        if ceiling.isdigit() and int(ceiling) > 0:
+            lim.max_tokens = min(lim.max_tokens, int(ceiling))
+        return lim
 
     def set(self, **kw) -> Limits:
         bad = [k for k in kw if k not in FIELDS]

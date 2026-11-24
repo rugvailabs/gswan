@@ -10,7 +10,7 @@ Modelled on the behaviour described for Google Antigravity's `/swarm` (coordinat
 Each worker card in the dashboard also has a **diff** button: the files its branch changed since its base commit, with line-numbered patches, files outside its owned paths flagged, and the critic findings and verifier verdicts shown next to the code they refer to. Only committed changes are shown; uncommitted paths are listed by name. The board also has a **Graph** tab (who messaged whom, arrows weighted by count, a slider to see it at any point, and a table of the same data) and a **Replay** tab: step or play through the run event by event and see each agent's task status, last message and cost as they stood at that moment.
 
 ## Evals
-`swarm eval` compares one agent against the swarm modes (`single`, `swarm`, `swarm+research`, `swarm+critics`, `swarm+all`) on fixed tasks in `evals/tasks/`, scored by hidden tests the agents never see. It spends real money, so it is a dry run (it prints the run count and worst-case spend) until you add `--yes`. Example: `swarm eval --task textkit --mode single --mode swarm --repeat 3 --max-cost 2 --yes`; results land in `evals/results/`.
+`swarm eval` compares one agent against the swarm modes (`single`, `swarm`, `swarm+research`, `swarm+critics`, `swarm+all`) on fixed tasks in `evals/tasks/` (`textkit`: three independent modules; `ledger`: four parts sharing one data type; `inventory-bugs`: fixing deviations from a spec), scored by hidden tests the agents never see. It reports pass rate, tokens (input + output), cost and wall time per mode. It spends real money, so it is a dry run (it prints the run count and worst-case spend) until you add `--yes`. Each run is capped: `--max-cost` dollars for the top-level agent and `--max-tokens` (default 1.5M) for a swarm's agents, enforced through `SWARM_TOKEN_CEILING`, which nobody inside the run can lift. Example: `swarm eval --task ledger --mode single --mode swarm --repeat 2 --yes`; results land in `evals/results/`.
 
 ## Requirements
 - Claude Code (tested with 2.1.326) signed in; headless workers use the same auth (`claude auth login` / `claude setup-token`)
@@ -75,7 +75,7 @@ CLI: `swarm init|post|show|tail|digest|stale|export|tasks|limits|mention|integra
 | Variable | Default | Meaning |
 |---|---|---|
 | `SWARM_HOME` | nearest `.swarm/`, else git root, else cwd | project root |
-| `SWARM_VERIFIER_MODEL` | `sonnet` | model for verifiers |
+| `SWARM_VERIFIER_MODEL` | `auto` | model for verifiers; `auto` uses haiku when the worker's diff is under 200 changed code lines, else sonnet |
 | `SWARM_CRITIC_MODEL` | off | model for diff critics on every swarm (or pass `critics=true` at swarm_start) |
 | `SWARM_MONITOR` | `1` | `0` disables the monitor thread |
 | `SWARM_MONITOR_INTERVAL` | `15` | seconds between monitor checks |

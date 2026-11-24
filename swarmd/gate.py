@@ -11,16 +11,29 @@ import threading
 
 from .board import Board
 from .limits import BudgetExceeded
-from .critics import MAX_CRITIC_ROUNDS, PERSONAS, Critiques, choose_personas, fmt
+from .critics import DOC_SUFFIXES, MAX_CRITIC_ROUNDS, PERSONAS, SMALL_DIFF, Critiques, choose_personas, fmt
 from .models import EventIn, TurnResult, utc_now
 from .runner import Runner
 from .tasks import MAX_ROUNDS, Tasks
 
 MAX_NO_VERDICT = 2  # verifier turns that end without a verdict before escalating
+AUTO = "auto"  # verifier model chosen per worker from its first diff (see verifier_model_for)
+SMALL_MODEL, BIG_MODEL = "haiku", "sonnet"
+
+
+def verifier_model_for(changes: list[tuple[str, int]] | None) -> tuple[str, str]:
+    """(model, why) for an `auto` verifier. The eval pilot found verifiers cost as much as the workers: a small diff
+    gets haiku, a big or unknown one sonnet. Chosen once, at the verifier's first round, so its prompt cache stays warm."""
+    if changes is None:
+        return BIG_MODEL, "diff size unknown"
+    lines = sum(n for path, n in changes if not path.lower().endswith(DOC_SUFFIXES))
+    if lines < SMALL_DIFF:
+        return SMALL_MODEL, f"{lines} changed code lines (< {SMALL_DIFF})"
+    return BIG_MODEL, f"{lines} changed code lines"
 
 
 class Gate:
-    def __init__(self, runner: Runner, verifier_model: str = "sonnet", critic_model: str | None = None,
+    def __init__(self, runner: Runner, verifier_model: str = AUTO, critic_model: str | None = None,
                  personas: tuple[str, ...] = ("correctness", "security", "tests")):
         self.runner, self.board = runner, runner.board
         self.tasks, self.verifier_model = Tasks(runner.board), verifier_model
@@ -76,7 +89,7 @@ class Gate:
                     if not fix.ok or fix.queued_only:
                         return
                     continue
-            v = self.runner.reg.define_verifier(self.runner.reg.get(name), self.verifier_model)
+            v = self.verifier(target)
             if not v.cwd:  # worktree path becomes known after the worker's first turn
                 self.runner.reg.set_cwd(v, target.worktree)
             self.board.post(EventIn(agent="swarmd", kind="update", body=f"verifying {name} (round {t.rounds + 1})", refs=[f"task:{name}:verifying"]))
@@ -106,6 +119,21 @@ class Gate:
                 if not fix.ok or fix.queued_only:
                     return
                 # worker posts `done` again -> task flips to awaiting_verification -> loop verifies again
+
+    def verifier(self, target):
+        """The worker's verifier, defined on first use. With model `auto`, its model is picked from the diff then."""
+        from .workers import WorkerError
+        try:
+            return self.runner.reg.get(f"verify-{target.name}")
+        except WorkerError:
+            pass
+        model, why = self.verifier_model, ""
+        if model == AUTO:
+            model, why = verifier_model_for(self.changes(target))
+        v = self.runner.reg.define_verifier(target, model)
+        if why:
+            self.board.post(EventIn(agent="swarmd", kind="update", body=f"verifier for {target.name} runs on {model}: {why}"))
+        return v
 
     # ---- pause / resume ---------------------------------------------------------------
     def pause(self, name: str, reason: str) -> None:

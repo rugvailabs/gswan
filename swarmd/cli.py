@@ -174,12 +174,14 @@ def cmd_eval(a, root: Path) -> int:
     if bad or not tasks:
         print(f"error: {'unknown mode(s) ' + ', '.join(bad) if bad else 'no tasks found in ' + str(base / 'tasks')}", file=sys.stderr)
         return 2
-    n, worst = evals.worst_case(tasks, modes, a.repeat, a.max_cost)
-    print(f"{len(tasks)} task(s) x {len(modes)} mode(s) x {a.repeat} = {n} real run(s); per-run cap ${a.max_cost:.2f} (swarm modes bill workers too); rough worst case ${worst:.0f}")
+    n, worst = evals.worst_case(tasks, modes, a.repeat, a.max_cost, a.max_tokens)
+    print(f"{len(tasks)} task(s) x {len(modes)} mode(s) x {a.repeat} = {n} real run(s); caps per run: ${a.max_cost:.2f} for the top-level agent, "
+          f"{tokens.fmt(a.max_tokens)} tokens for a swarm's agents (~${a.max_tokens / 1e6 * evals.USD_PER_MILLION_TOKENS:.2f}); worst case ${worst:.0f}")
     if not a.yes:
         print("dry run: nothing executed. Re-run with --yes to spend that money.")
         return 0
-    rep = evals.run_eval(base, tasks, modes, a.repeat, claude=os.environ.get("SWARM_CLAUDE_BIN", "claude"), model=a.model, max_cost=a.max_cost)
+    rep = evals.run_eval(base, tasks, modes, a.repeat, claude=os.environ.get("SWARM_CLAUDE_BIN", "claude"), model=a.model, max_cost=a.max_cost,
+                         max_tokens=a.max_tokens)
     out = base / "results"; out.mkdir(exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     (out / f"{stamp}.json").write_text(rep.to_json()); (out / f"{stamp}.md").write_text(rep.markdown())
@@ -423,6 +425,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("eval", help="compare single agent vs swarm modes on fixed tasks (spends money: dry run unless --yes)")
     s.add_argument("--task", action="append"); s.add_argument("--mode", action="append"); s.add_argument("--repeat", type=int, default=1)
     s.add_argument("--max-cost", type=float, default=3.0, help="USD cap per run for the top-level agent"); s.add_argument("--model", default="sonnet")
+    s.add_argument("--max-tokens", type=int, default=1_500_000, help="hard token cap (input + output) for a swarm's agents per run")
     s.add_argument("--dir", help="eval directory (default: evals/ in the plugin)"); s.add_argument("--yes", action="store_true")
     s = sub.add_parser("report", help="run report: plan vs actual, decisions, research, critiques, verdicts, monitor actions, tokens by role")
     s.add_argument("--out"); s.add_argument("--json", action="store_true")

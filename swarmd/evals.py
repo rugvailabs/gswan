@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from . import tokens
 from .board import Board
 from .gate import Gate
 from .integrate import Integrator
@@ -26,6 +27,10 @@ from .runner import Exec, Runner, subprocess_executor
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODES = ("single", "swarm", "swarm+research", "swarm+critics", "swarm+all")
 Executor = Callable[[list[str], Path, dict[str, str], float], Exec]
+
+# Measured on 2026-11-24 real runs (sonnet coordinator/verifiers/critics, mixed workers): $5.45 for 962k tokens (input + output).
+USD_PER_MILLION_TOKENS = 6.0
+DEFAULT_MAX_TOKENS = 1_500_000  # per swarm run, enforced through SWARM_TOKEN_CEILING
 
 RESEARCH_HINT = "Before planning, define 1-2 researchers (define_researcher) for facts you genuinely lack, wait for them, and use their cited findings."
 EVAL_RULES = ("[AUTOMATED EVAL: no human will answer questions. Do not ask any. When merge_workers reports allMerged (and merge_workers(verify=true) "
@@ -48,6 +53,7 @@ class RunResult:
     passed: bool
     cost_usd: float
     wall_s: float
+    tokens: int = 0  # input + output (cache reads not counted), coordinator/agent plus every swarm agent
     escalations: int = 0
     blocked: int = 0
     error: str = ""
@@ -65,18 +71,19 @@ class Report:
             rs = [r for r in self.runs if r.mode == m]
             if rs:
                 out[m] = {"runs": len(rs), "passRate": round(sum(r.passed for r in rs) / len(rs), 2),
+                          "meanTokens": int(statistics.mean(r.tokens for r in rs)),
                           "meanCostUsd": round(statistics.mean(r.cost_usd for r in rs), 3),
                           "meanWallS": round(statistics.mean(r.wall_s for r in rs), 1),
                           "escalations": sum(r.escalations for r in rs), "blocked": sum(r.blocked for r in rs)}
         return out
 
     def markdown(self) -> str:
-        rows = ["| mode | runs | pass rate | mean cost | mean wall | escalations | blocked |", "|---|---|---|---|---|---|---|"]
+        rows = ["| mode | runs | pass rate | mean tokens | mean cost | mean wall | escalations | blocked |", "|---|---|---|---|---|---|---|---|"]
         for m, s in self.summary().items():
-            rows.append(f"| {m} | {s['runs']} | {s['passRate']:.0%} | ${s['meanCostUsd']:.3f} | {s['meanWallS']}s | {s['escalations']} | {s['blocked']} |")
-        det = ["", "| task | mode | pass | cost | wall | error |", "|---|---|---|---|---|---|"]
+            rows.append(f"| {m} | {s['runs']} | {s['passRate']:.0%} | {tokens.fmt(s['meanTokens'])} | ${s['meanCostUsd']:.3f} | {s['meanWallS']}s | {s['escalations']} | {s['blocked']} |")
+        det = ["", "| task | mode | pass | tokens | cost | wall | error |", "|---|---|---|---|---|---|---|"]
         for r in self.runs:
-            det.append(f"| {r.task} | {r.mode} | {'yes' if r.passed else 'NO'} | ${r.cost_usd:.3f} | {r.wall_s:.0f}s | {(r.error or r.detail)[:80]} |")
+            det.append(f"| {r.task} | {r.mode} | {'yes' if r.passed else 'NO'} | {tokens.fmt(r.tokens)} | ${r.cost_usd:.3f} | {r.wall_s:.0f}s | {(r.error or r.detail)[:80]} |")
         return "\n".join(rows + det) + "\n"
 
     def to_json(self) -> str:
@@ -147,26 +154,29 @@ def swarm_command(task: EvalTask, mode: str, claude: str, model: str, budget: fl
             "--allowedTools", "Read", "Glob", "Grep", "Skill", "mcp__plugin_todo_swarm", "mcp__swarm"]
 
 
-def _json_cost(stdout: str) -> tuple[float, str]:
+def _json_cost(stdout: str) -> tuple[float, str, int]:
+    """(cost, error, tokens input + output) of a `claude -p --output-format json` result."""
     try:
         d = json.loads(stdout)
-        return float(d.get("total_cost_usd") or 0), "" if not d.get("is_error") else str(d.get("result", ""))[:200]
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return 0.0, f"unparseable output: {stdout[:120]}"
+        return (float(d.get("total_cost_usd") or 0), "" if not d.get("is_error") else str(d.get("result", ""))[:200],
+                tokens.view(**tokens.parse_usage(d))["total"])
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        return 0.0, f"unparseable output: {stdout[:120]}", 0
 
 
 def run_one(task: EvalTask, mode: str, workdir: Path, *, executor: Executor = subprocess_executor, claude: str = "claude",
-            model: str = "sonnet", max_cost: float = 3.0, plugin_dir: Path = PROJECT_ROOT) -> RunResult:
+            model: str = "sonnet", max_cost: float = 3.0, plugin_dir: Path = PROJECT_ROOT,
+            max_tokens: int = DEFAULT_MAX_TOKENS) -> RunResult:
     repo = prepare(task, workdir / f"{task.id}-{mode.replace('+', '_')}")
     t0 = time.monotonic()
-    env = dict(os.environ, SWARM_CLAUDE_BIN=claude, SWARM_HOME=str(repo))
+    env = dict(os.environ, SWARM_CLAUDE_BIN=claude, SWARM_HOME=str(repo), SWARM_TOKEN_CEILING=str(max_tokens))
     if mode == "single":
         cmd = single_command(task, claude, model, max_cost)
     else:
         cmd = swarm_command(task, mode, claude, model, max_cost, plugin_dir)
         env.pop("SWARM_CRITIC_MODEL", None)  # the mode decides, not the caller's environment
     ex = executor(cmd, repo, env, float(task.timeout_s))
-    cost, err = _json_cost(ex.stdout)
+    cost, err, used = _json_cost(ex.stdout)
     if ex.returncode == 124:
         err = err or ex.stderr
     escalations = blocked = 0
@@ -176,7 +186,8 @@ def run_one(task: EvalTask, mode: str, workdir: Path, *, executor: Executor = su
             with board._conn() as c:
                 sid = c.execute("SELECT id FROM swarms ORDER BY created_at DESC LIMIT 1").fetchone()
                 if sid:
-                    cost += c.execute("SELECT COALESCE(SUM(cost_usd),0) FROM workers WHERE swarm_id=?", (sid[0],)).fetchone()[0]
+                    r = c.execute("SELECT COALESCE(SUM(cost_usd),0), COALESCE(SUM(tokens_in+tokens_out+tokens_cache_write),0) FROM workers WHERE swarm_id=?", (sid[0],)).fetchone()
+                    cost += r[0]; used += r[1]
                     escalations = c.execute("SELECT COUNT(*) FROM tasks WHERE swarm_id=? AND status='escalated'", (sid[0],)).fetchone()[0]
                     blocked = c.execute("SELECT COUNT(*) FROM events WHERE swarm_id=? AND kind='blocked'", (sid[0],)).fetchone()[0]
             ap = Integrator(Gate(Runner(board, repo))).apply()  # the harness, not the coordinator, applies the integration branch
@@ -185,7 +196,7 @@ def run_one(task: EvalTask, mode: str, workdir: Path, *, executor: Executor = su
         except Exception as e:  # a broken swarm db is a failed run, not a crashed eval
             err = err or f"could not read swarm state: {e}"
     ok, detail = check(task, repo)
-    return RunResult(task.id, mode, ok, round(cost, 4), round(time.monotonic() - t0, 1), escalations, blocked, err, detail, str(repo))
+    return RunResult(task.id, mode, ok, round(cost, 4), round(time.monotonic() - t0, 1), used, escalations, blocked, err, detail, str(repo))
 
 
 def run_eval(root: Path, tasks: list[EvalTask], modes: list[str], repeat: int, workdir: Path | None = None, **kw) -> Report:
@@ -198,6 +209,8 @@ def run_eval(root: Path, tasks: list[EvalTask], modes: list[str], repeat: int, w
     return rep
 
 
-def worst_case(tasks: list[EvalTask], modes: list[str], repeat: int, max_cost: float) -> tuple[int, float]:
+def worst_case(tasks: list[EvalTask], modes: list[str], repeat: int, max_cost: float, max_tokens: int = DEFAULT_MAX_TOKENS) -> tuple[int, float]:
+    """Every run hits every cap: the top-level agent its dollar cap, a swarm's agents the token ceiling (priced at the measured rate)."""
+    per = {m: max_cost + (0 if m == "single" else max_tokens / 1e6 * USD_PER_MILLION_TOKENS) for m in modes}
     n = len(tasks) * len(modes) * repeat
-    return n, n * max_cost * 2.5  # swarm modes can exceed the coordinator's own cap (workers are billed separately; swarm limits cap ~$10)
+    return n, round(len(tasks) * repeat * sum(per.values()), 2)
