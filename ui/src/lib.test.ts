@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { budgetParts, eventTone, filterEvents, findingMatchesFile, findingTarget, mergeEvents, nextKeyMoment, parsePatch, replayState, summarize, timeAgo, duration } from "./lib";
+import { budgetParts, eventTone, filterEvents, fmtTokens, findingMatchesFile, findingTarget, mergeEvents, nextKeyMoment, parsePatch, replayState, summarize, timeAgo, duration } from "./lib";
 import type { BoardEvent, EventKind } from "./types";
 
 const ev = (seq: number, kind: EventKind = "update", agent = "api", body = "x"): BoardEvent =>
@@ -49,18 +49,22 @@ describe("timeAgo", () => {
 });
 
 describe("summarize", () => {
-  it("counts done tasks and sums cost", () => {
-    expect(summarize([{ costUsd: 0.1, task: { status: "done" } }, { costUsd: 0.25, task: { status: "open" } }, { costUsd: 0, task: null }]))
-      .toEqual({ total: 3, done: 1, cost: 0.35 });
+  it("counts done tasks and sums tokens, keeping cached apart", () => {
+    const t = (total: number, cached = 0) => ({ total, cached });
+    expect(summarize([{ tokens: t(1000, 50_000), task: { status: "done" } }, { tokens: t(2500), task: { status: "open" } }, { tokens: t(0), task: null }]))
+      .toEqual({ total: 3, done: 1, tokens: 3500, cached: 50_000 });
+  });
+  it("formats token counts", () => {
+    expect([0, 999, 1000, 1234, 24101, 999_949, 1_000_000, 1_234_567].map(fmtTokens)).toEqual(["0", "999", "1k", "1.2k", "24.1k", "999.9k", "1M", "1.23M"]);
   });
 });
 
 describe("budgetParts", () => {
-  const limits = { max_wakeups: 40, max_cost_usd: 10, max_workers: 6 };
+  const limits = { max_wakeups: 40, max_tokens: 3_000_000, max_workers: 6 };
   it("is empty without data", () => expect(budgetParts(undefined)).toEqual([]));
   it("formats and flags thresholds", () => {
-    const parts = budgetParts({ limits, usage: { wakeups: 32, cost_usd: 12.5, workers: 2 } });
-    expect(parts.map((p) => p.text)).toEqual(["32/40", "$12.50/$10", "2/6"]);
+    const parts = budgetParts({ limits, usage: { wakeups: 32, tokens: 3_100_000, workers: 2 } });
+    expect(parts.map((p) => p.text)).toEqual(["32/40", "3.10M/3M", "2/6"]);
     expect(parts.map((p) => p.tone)).toEqual(["warn", "bad", "muted"]);
   });
 });
@@ -95,10 +99,10 @@ describe("replay", () => {
   const run: BoardEvent[] = [
     at(1, "coordinator", "plan", "worker api: build the api"),
     at(2, "coordinator", "mention", "@api go"),
-    at(3, "swarmd", "update", "api replied: built it", ["reply:api", "cost:0.0200", "turn:1"]),
+    at(3, "swarmd", "update", "api replied: built it", ["reply:api", "tokens:20000:500:900000", "turn:1"]),
     at(4, "api", "done", "finished"),
     at(5, "swarmd", "update", "verifying api (round 1)", ["task:api:verifying"]),
-    at(6, "swarmd", "update", "verify-api replied: fails", ["reply:verify-api", "cost:0.0100", "turn:1"]),
+    at(6, "swarmd", "update", "verify-api replied: fails", ["reply:verify-api", "tokens:9000:100:40000", "turn:1"]),
     at(7, "verify-api", "verify", "fail api: 1. tests fail", ["task:api:failed"]),
     at(8, "verify-api", "verify", "pass api: ok"), // an old event without the tag is read from its body
     at(9, "swarmd", "blocked", "ui failed twice", ["task:ui:escalated"]),
@@ -111,18 +115,18 @@ describe("replay", () => {
     expect(task(8, "ui")).toBe("escalated");
     expect(task(8, "verify-api")).toBeNull(); // verifiers have no task
   });
-  it("sums reported cost, turns and progress up to the cursor", () => {
+  it("sums reported tokens (input + output, not cached), turns and progress up to the cursor", () => {
     const mid = replayState(run, 2, ["api", "ui"]);
-    expect(mid.costUsd).toBeCloseTo(0.02);
+    expect(mid.tokens).toBe(20500);
     expect(mid.agents.find((a) => a.name === "api")).toMatchObject({ turns: 1, events: 1 });
     expect(mid.elapsedS).toBe(20);
     expect(mid.at?.seq).toBe(3);
     const end = replayState(run, 99, ["api", "ui"]); // clamped to the last event
-    expect(end.costUsd).toBeCloseTo(0.03);
+    expect(end.tokens).toBe(29600);
     expect([end.tasks, end.tasksDone]).toEqual([2, 1]);
     expect(end.agents.map((a) => a.name)).toEqual(["api", "ui", "coordinator", "verify-api"]); // task owners first; swarmd is not an actor
   });
-  it("handles an empty board", () => expect(replayState([], 0)).toMatchObject({ at: null, agents: [], costUsd: 0 }));
+  it("handles an empty board", () => expect(replayState([], 0)).toMatchObject({ at: null, agents: [], tokens: 0 }));
   it("finds key moments in both directions", () => {
     expect(nextKeyMoment(run, 0, 1)).toBe(3);
     expect(nextKeyMoment(run, 3, 1)).toBe(6);

@@ -5,7 +5,7 @@ A coordinator splits a big task across **named, persistent workers**. Each worke
 Modelled on the behaviour described for Google Antigravity's `/swarm` (coordinator, named workers, verifier, monitor, shared board). Antigravity 1.22.2 contains no `/swarm` code, so the verifier, monitor and board here are our own design from that description. See `DESIGN.md`.
 
 ## Run report
-`swarm report` (also the **Run report** panel in the UI, or `GET /report`) shows, after or during a run: budget and cost by role, each worker's planned paths vs the files its branch actually changed (scope drift is flagged), the coordinator's recorded decisions (and any required one it never explained), research findings with sources, critic findings, verifier verdicts, monitor actions with the rule that fired, and recent denied tool calls.
+`swarm report` (also the **Run report** panel in the UI, or `GET /report`) shows, after or during a run: budget and tokens by role, each worker's planned paths vs the files its branch actually changed (scope drift is flagged), the coordinator's recorded decisions (and any required one it never explained), research findings with sources, critic findings, verifier verdicts, monitor actions with the rule that fired, and recent denied tool calls.
 
 Each worker card in the dashboard also has a **diff** button: the files its branch changed since its base commit, with line-numbered patches, files outside its owned paths flagged, and the critic findings and verifier verdicts shown next to the code they refer to. Only committed changes are shown; uncommitted paths are listed by name. The board also has a **Replay** tab: step or play through the run event by event and see each agent's task status, last message and cost as they stood at that moment.
 
@@ -39,13 +39,13 @@ Give the coordinator `Bash(python3:*)` (or your test command) if you want it to 
 
 Workers can also ask each other for things (`swarm mention <worker> "..."`, delivered by the monitor within ~15 s, max 5 messages per pair).
 
-Budgets protect you: each swarm defaults to 6 workers, 40 wake-ups, 1 hour and $10. The coordinator can pick lower or higher values at `swarm_start` (tell it in your prompt); only you can raise them mid-run: `swarm limits --set max_cost_usd=20`. When a budget is hit, workers stop, a `blocked` event is posted and queued messages wait.
+Budgets protect you: each swarm defaults to 6 workers, 40 wake-ups, 1 hour and 3M tokens (input + output; tokens re-read from the prompt cache are shown but not counted). The coordinator can pick lower or higher values at `swarm_start` (tell it in your prompt); only you can raise them mid-run: `swarm limits --set max_tokens=6000000`. When a budget is hit, workers stop, a `blocked` event is posted and queued messages wait.
 
 Watch and steer from the browser:
 ```
 uv run --project /path/to/gswan swarm serve      # prints http://127.0.0.1:7777/?token=...
 ```
-Cards per worker (status, task, monitor warnings, activity, cost), the live board with filters, and a box to `@mention` a worker or post a note.
+Cards per worker (status, task, monitor warnings, activity, tokens), the live board with filters, and a box to `@mention` a worker or post a note.
 
 ## How it works
 | Piece | What it does |
@@ -55,7 +55,8 @@ Cards per worker (status, task, monitor warnings, activity, cost), the live boar
 | Verifier | A worker's `done` is provisional. A read-only `verify-<worker>` session inspects the diff, runs the granted checks and gives a verdict. Fail sends numbered reasons back to the same worker; two failed rounds (or no verdict twice) escalate to you. |
 | Monitor | Detects *hung* (no output), *looping* (identical tool calls / posts) and *forgot to report* without an LLM. Ladder: nudge, kill and resume with a restart prompt, escalate. Optional `--llm-judge` / `SWARM_MONITOR_LLM=1`: a cheap Haiku call (no tools, $0.05 cap) is asked whether a quiet worker is legitimately busy (long build/tests) before it is killed, up to twice per episode. It also dispatches peer mentions. |
 | Integration | `merge_workers` / `swarm integrate`: clean merges in order, conflicts to a verified `integrator` worker, result on `swarm/<id>/integration`, applied by you. |
-| Budgets | Per-swarm caps on workers, wake-ups, wall time and cost, enforced before every turn. |
+| Budgets | Per-swarm caps on workers, wake-ups, wall time and tokens, enforced before every turn. Usage is shown in tokens, not as a price. |
+| Tokens | Per worker: input (fresh input + cache writes), output, and cached (cache reads) as reported by `claude -p`. |
 | Board | SQLite event log (`.swarm/swarm.db`), mirrored to `.swarm/board.md`; secrets are redacted before storage. |
 | Stop hook | Blocks the coordinator (max 3 times) while any task is not `done`/`escalated`. |
 

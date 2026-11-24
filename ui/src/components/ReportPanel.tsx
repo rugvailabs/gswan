@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 
-/** Run report: plan vs actual, scope drift, decisions, research, critiques, verdicts, monitor actions, cost by role. */
+/** Run report: plan vs actual, scope drift, decisions, research, critiques, verdicts, monitor actions, tokens by role. */
 export function ReportPanel() {
   const token = useStore((s) => s.token);
   const [open, setOpen] = useState(false);

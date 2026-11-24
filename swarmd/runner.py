@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from .board import Board
+from . import tokens
 from .models import EventIn, TurnResult, Worker, WorkerSpec
 from .limits import BudgetExceeded, LimitsStore
 from .workers import Registry, WorkerError
@@ -309,7 +310,7 @@ class Runner:
         return "\n\n".join(f"[{s}] {m}" for s, m in msgs)
 
     # ---- one turn ---------------------------------------------------------
-    def _run_turn(self, w: Worker, prompt: str, wt: Path, first: bool) -> tuple[bool, str, float, list[str], str]:
+    def _run_turn(self, w: Worker, prompt: str, wt: Path, first: bool) -> tuple[bool, str, float, list[str], str, dict[str, int]]:
         for attempt in (0, 1):
             self.reg.touch(w.name, "turn start", reset=True)
             ex = self.exec(self.build_command(w, prompt, first_turn=first), wt, self.build_env(w, wt), self.timeout)
@@ -321,14 +322,15 @@ class Runner:
         try:
             d = json.loads(ex.stdout)
         except json.JSONDecodeError:
-            return False, "", 0.0, [], err or f"exit {ex.returncode}, unparseable output: {ex.stdout[:200]}"
+            return False, "", 0.0, [], err or f"exit {ex.returncode}, unparseable output: {ex.stdout[:200]}", dict(tokens.ZERO)
         denials = []
         for x in d.get("permission_denials", []):
             ti = x.get("tool_input") or {}
             detail = ti.get("command") or ti.get("file_path") or ""
             denials.append(f"{x.get('tool_name', '?')}({detail[:100]})" if detail else x.get("tool_name", "?"))
         ok = ex.returncode == 0 and not d.get("is_error")
-        return ok, str(d.get("result", "")), float(d.get("total_cost_usd") or 0), denials, "" if ok else (str(d.get("result"))[:300] or err)
+        return (ok, str(d.get("result", "")), float(d.get("total_cost_usd") or 0), denials,
+                "" if ok else (str(d.get("result"))[:300] or err), tokens.parse_usage(d))
 
     MAX_PEER_MESSAGES = 5  # per sender->target pair per swarm: stops worker ping-pong
 
@@ -385,9 +387,11 @@ class Runner:
                     msgs = self.reg.drain(w)
                     if not msgs:
                         break
-                    ok, text, cost, denials, err = self._run_turn(w, self.merge_messages(msgs), wt, first=w.turns == 0)
-                    self.reg.finish_turn(w, ok=ok, cost=cost, error=err)
-                    last = TurnResult(worker=name, ok=ok, text=text or err, session_id=w.session_id, cost_usd=cost,
+                    ok, text, cost, denials, err, used = self._run_turn(w, self.merge_messages(msgs), wt, first=w.turns == 0)
+                    self.reg.finish_turn(w, ok=ok, cost=cost, error=err, tokens=used)
+                    tv = tokens.view(**used)
+                    spent = {k: tv[k] + (last.tokens.get(k, 0) if last else 0) for k in tv}
+                    last = TurnResult(worker=name, ok=ok, text=text or err, session_id=w.session_id, cost_usd=cost, tokens=spent,
                                       denials=denials, turns_run=(last.turns_run if last else 0) + 1)
                     if not ok:
                         had_error = True
@@ -398,7 +402,7 @@ class Runner:
                         break
                     if text and text.strip():  # the worker's own words for this turn, so the dashboard can show the conversation
                         self.board.post(EventIn(agent="swarmd", kind="update", body=f"{name} replied: {text.strip()}"[:2500],
-                                                refs=[f"reply:{name}", f"cost:{cost:.4f}", f"turn:{w.turns + 1}", f"session:{w.session_id}"]))
+                                                refs=[f"reply:{name}", f"tokens:{tv['input']}:{tv['output']}:{tv['cached']}", f"turn:{w.turns + 1}", f"session:{w.session_id}"]))
                     if denials:
                         self.board.post(EventIn(agent="swarmd", kind="update",
                                                 body=f"worker {name} was denied: {'; '.join(sorted(set(denials)))}"[:2000]))

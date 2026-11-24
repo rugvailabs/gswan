@@ -1,4 +1,4 @@
-import { timeAgo } from "../lib";
+import { fmtTokens, timeAgo } from "../lib";
 import { useStore } from "../store";
 import type { MonitorFinding, TaskStatus, WorkerView } from "../types";
 
@@ -49,7 +49,9 @@ function Card({ w, finding }: { w: WorkerView; finding?: MonitorFinding }) {
       <dl className="grid grid-cols-2 gap-x-3 text-xs tone-muted">
         <dt>owns</dt><dd className="mono truncate" title={w.owns.join(", ")}>{w.owns.join(", ")}</dd>
         <dt>model</dt><dd>{w.model}</dd>
-        <dt>turns · cost</dt><dd className="mono">{w.turns} · ${w.costUsd.toFixed(3)}</dd>
+        <dt>turns</dt><dd className="mono">{w.turns}</dd>
+        <dt>tokens</dt><dd className="mono" aria-label={`${w.name} tokens`}>{fmtTokens(w.tokens.input)} in · {fmtTokens(w.tokens.output)} out</dd>
+        {w.tokens.cached > 0 && (<><dt title="Re-read from the prompt cache. Large, cheap, and not counted in the budget.">cached</dt><dd className="mono">{fmtTokens(w.tokens.cached)}</dd></>)}
         {w.queue > 0 && (<><dt>queued</dt><dd>{w.queue}</dd></>)}
         {w.branch && (<><dt>branch</dt><dd className="mono truncate" title={w.branch}>{w.branch}</dd></>)}
       </dl>

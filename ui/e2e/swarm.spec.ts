@@ -43,7 +43,7 @@ test("a human @mention wakes the worker and its reply shows up", async ({ page }
   const board = page.getByRole("region", { name: "board" });
   await expect(board.getByText("@api please add a health endpoint")).toBeVisible();
   await expect(board.getByText("got: please add a health endpoint")).toBeVisible({ timeout: 15_000 });
-  await expect(card).toContainText("1 · $0.012", { timeout: 15_000 });
+  await expect(card.getByLabel(/tokens$/)).toHaveText("12.2k in · 340 out", { timeout: 15_000 });
 });
 
 test("a worker's committed changes show in the diff panel", async ({ page }) => {
@@ -56,7 +56,7 @@ test("a worker's committed changes show in the diff panel", async ({ page }) => 
   await page.getByLabel("Message").fill("draw the header");
   await page.getByRole("button", { name: /Send to @ui/ }).click();
   await expect(page.getByRole("region", { name: "board" }).getByText("got: draw the header")).toBeVisible({ timeout: 15_000 });
-  await expect(card).toContainText("1 · $0.012", { timeout: 15_000 });
+  await expect(card.getByLabel(/tokens$/)).toHaveText("12.2k in · 340 out", { timeout: 15_000 });
   await panel.getByRole("button", { name: "Refresh" }).click();
   await expect(panel.getByLabel("diff summary")).toContainText("1 file changed");
   await expect(panel.getByLabel("patch src/ui/notes.txt")).toContainText("+got:");

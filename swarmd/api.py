@@ -45,7 +45,7 @@ class LimitsIn(CamelModel):
     max_workers: int | None = Field(default=None, gt=0, le=64)
     max_wakeups: int | None = Field(default=None, gt=0, le=2000)
     max_wall_s: int | None = Field(default=None, gt=0, le=86400)
-    max_cost_usd: float | None = Field(default=None, gt=0, le=1000)
+    max_tokens: int | None = Field(default=None, gt=0, le=1_000_000_000)
 
 
 class MentionIn(CamelModel):

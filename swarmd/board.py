@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS workers (
   goal TEXT NOT NULL, owns TEXT NOT NULL DEFAULT '[]', tools TEXT NOT NULL DEFAULT '[]',
   model TEXT NOT NULL DEFAULT 'sonnet', session_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle',
   worktree TEXT, branch TEXT, turns INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0,
+  tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_write INTEGER NOT NULL DEFAULT 0, tokens_cache_read INTEGER NOT NULL DEFAULT 0,
   last_error TEXT, pid INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE (swarm_id, name));
 CREATE TABLE IF NOT EXISTS tasks (
@@ -35,7 +37,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (swarm_id, worker));
 CREATE TABLE IF NOT EXISTS swarm_limits (
   swarm_id TEXT PRIMARY KEY, max_workers INTEGER NOT NULL, max_wakeups INTEGER NOT NULL,
-  max_wall_s INTEGER NOT NULL, max_cost_usd REAL NOT NULL);
+  max_wall_s INTEGER NOT NULL, max_cost_usd REAL NOT NULL DEFAULT 0, max_tokens INTEGER NOT NULL DEFAULT 3000000);
 CREATE TABLE IF NOT EXISTS monitor_state (
   swarm_id TEXT NOT NULL, worker TEXT NOT NULL, nudges INTEGER NOT NULL DEFAULT 0, restarts INTEGER NOT NULL DEFAULT 0,
   last_action TEXT, PRIMARY KEY (swarm_id, worker));
@@ -65,9 +67,13 @@ class Board:
             for col, ddl in (("role", "TEXT NOT NULL DEFAULT 'worker'"), ("base_sha", "TEXT"), ("cwd", "TEXT"),
                              ("last_activity", "TEXT"), ("activity_note", "TEXT"), ("tool_sig", "TEXT"),
                              ("tool_repeat", "INTEGER NOT NULL DEFAULT 0"), ("child_pid", "INTEGER"),
-                             ("max_gap_s", "REAL NOT NULL DEFAULT 0"), ("recent_tools", "TEXT NOT NULL DEFAULT '[]'")):
+                             ("max_gap_s", "REAL NOT NULL DEFAULT 0"), ("recent_tools", "TEXT NOT NULL DEFAULT '[]'"),
+                             ("tokens_in", "INTEGER NOT NULL DEFAULT 0"), ("tokens_out", "INTEGER NOT NULL DEFAULT 0"),
+                             ("tokens_cache_write", "INTEGER NOT NULL DEFAULT 0"), ("tokens_cache_read", "INTEGER NOT NULL DEFAULT 0")):
                 if col not in have:
                     c.execute(f"ALTER TABLE workers ADD COLUMN {col} {ddl}")
+            if "max_tokens" not in {r["name"] for r in c.execute("PRAGMA table_info(swarm_limits)")}:  # budgets were in USD before
+                c.execute("ALTER TABLE swarm_limits ADD COLUMN max_tokens INTEGER NOT NULL DEFAULT 3000000")
             if "judged" not in {r["name"] for r in c.execute("PRAGMA table_info(monitor_state)")}:
                 c.execute("ALTER TABLE monitor_state ADD COLUMN judged INTEGER NOT NULL DEFAULT 0")
 
@@ -91,8 +97,8 @@ class Board:
         with self._conn() as c:
             c.execute("UPDATE swarms SET status='archived' WHERE status='active'")
             c.execute("INSERT INTO swarms VALUES (?,?,?,?)", (sw.id, sw.task, sw.status, sw.created_at))
-            c.execute("INSERT INTO swarm_limits VALUES (?,?,?,?,?)",
-                      (sw.id, lim.max_workers, lim.max_wakeups, lim.max_wall_s, lim.max_cost_usd))
+            c.execute("INSERT INTO swarm_limits (swarm_id,max_workers,max_wakeups,max_wall_s,max_cost_usd,max_tokens) VALUES (?,?,?,?,0,?)",
+                      (sw.id, lim.max_workers, lim.max_wakeups, lim.max_wall_s, lim.max_tokens))
         self._export()
         return sw
 

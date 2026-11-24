@@ -29,12 +29,15 @@ export interface TaskView {
   reasons: string[];
 }
 
+/** input = fresh input + cache writes; cached = cache reads (large and cheap); total = input + output, which is what the budget counts. */
+export interface TokenCount { input: number; output: number; cached: number; total: number }
+
 export interface WorkerView {
   name: string;
   status: "idle" | "running" | "error";
   busy: boolean;
   turns: number;
-  costUsd: number;
+  tokens: TokenCount;
   owns: string[];
   branch: string | null;
   model: string;
@@ -53,8 +56,8 @@ export interface MonitorFinding {
 }
 
 export interface Budget {
-  limits: { max_workers: number; max_wakeups: number; max_wall_s: number; max_cost_usd: number };
-  usage: { workers: number; wakeups: number; wall_s: number; cost_usd: number };
+  limits: { max_workers: number; max_wakeups: number; max_wall_s: number; max_tokens: number };
+  usage: { workers: number; wakeups: number; wall_s: number; tokens: number; tokens_cached: number };
 }
 
 export interface StatusResponse extends Partial<Budget> {
@@ -74,7 +77,7 @@ export interface SwarmInfo {
 }
 
 export interface WorkerDraft { name: string; goal: string; owns: string[]; tools: string[]; model: "sonnet" | "haiku" | "opus"; message?: string }
-export interface LimitsDraft { maxWorkers?: number; maxWakeups?: number; maxWallS?: number; maxCostUsd?: number }
+export interface LimitsDraft { maxWorkers?: number; maxWakeups?: number; maxWallS?: number; maxTokens?: number }
 
 export interface DiffFile {
   path: string;

@@ -124,7 +124,7 @@ Verifier asks "does it meet the task" after the work. Critics attack the work an
 - Built: `critics.py` (findings table, rounds, severity), role `critic` (Read/Glob/Grep + read-only git), `swarm critique <target> blocker|major|nit|ok "reason" --at file:line` (critic-only; blocker/major need file:line), gate runs persona critics in parallel before the verifier when `critics=true` at `swarm_start` or `SWARM_CRITIC_MODEL` is set (default off), blockers -> worker without spending a verifier round, after 2 rounds unresolved blockers go to the verifier brief. MCP `critique_plan`. Not built: `disputed:` replies, per-role budgets.
 
 ### S10 Transparency (done)
-- Provenance on events: agent, session, the tool calls behind a claim (`refs`), cost of the turn.
+- Provenance on events: agent, session, the tool calls behind a claim (`refs`), tokens used by the turn.
 - `decision` board kind: coordinator records why it split/merged/escalated/skipped a critic finding.
 - Plan-vs-actual per worker: owned paths vs files changed, goal vs verdict; scope drift flagged.
 - Monitor explainability: every nudge/kill records the signal and thresholds that triggered it.

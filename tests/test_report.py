@@ -13,7 +13,7 @@ from test_runner import git, repo  # noqa: F401
 
 class Fake:
     def __call__(self, cmd, cwd, env, timeout):
-        return Exec(0, json.dumps({"result": "did it", "total_cost_usd": 0.02, "is_error": False, "permission_denials": []}), "")
+        return Exec(0, json.dumps({"result": "did it", "total_cost_usd": 0.02, "usage": {"input_tokens": 100, "output_tokens": 50, "cache_creation_input_tokens": 900, "cache_read_input_tokens": 4000}, "is_error": False, "permission_denials": []}), "")
 
 
 def make(repo):
@@ -49,7 +49,7 @@ def test_in_scope_matching():
     assert report.in_scope("anything/x.py", ["."])  # the integrator owns the whole integration worktree
 
 
-def test_report_collects_sections_and_cost_by_role(repo):
+def test_report_collects_sections_and_tokens_by_role(repo):
     board, r, w = make(repo)
     r.define_researcher("docs", "q"); board.post(EventIn(agent="docs", kind="research", body='c | https://x.dev | "q"'))
     Critiques(board).begin_round("api"); Critiques(board).add("api", "critic-api-security", "blocker", "SQL injection", "a.py:3")
@@ -57,11 +57,14 @@ def test_report_collects_sections_and_cost_by_role(repo):
     board.post(EventIn(agent="monitor", kind="nudge", body="api hung: quiet 300s [rule: stall_s=300]"))
     Tasks(board).submit_verdict("api", True, ["ok"]) if Tasks(board).get("api").status in ("verifying", "awaiting_verification") else None
     d = report.build(board, repo)
-    assert d["agentsByRole"] == {"worker": 1, "researcher": 1} and d["costByRole"]["worker"] == 0.02
+    assert d["agentsByRole"] == {"worker": 1, "researcher": 1} and d["tokensByRole"]["worker"] == {"input": 1000, "output": 50, "cached": 4000, "total": 1050}
+    assert d["workers"][0]["tokens"]["total"] == 1050 and "costUsd" not in d["workers"][0] and d["usage"]["tokens"] == 1050
     assert d["workers"][0]["critiques"] == {"blocker": 1, "major": 0, "nit": 0}
     assert any("split api/ui" in x for x in d["decisions"]) and any("https://x.dev" in x for x in d["research"])
     assert any("SQL injection" in x for x in d["critiques"]) and any("rule: stall_s" in x for x in d["monitor"])
     md = report.markdown(d)
+    assert "tokens 1.1k/3M (input + output) · 4k more read from cache" in md and "worker 1k in / 50 out (+4k cached) (1 agents)" in md
+    assert "| 1k / 50 |" in md and "$" not in md
     for h in ("## Budget", "## Plan vs actual", "## Decisions", "## Research findings", "## Critic findings", "## Monitor actions", "## Denied tool calls"):
         assert h in md
 
@@ -69,7 +72,7 @@ def test_report_collects_sections_and_cost_by_role(repo):
 def test_reply_events_carry_provenance(repo):
     board, r, w = make(repo)
     reply = [e for e in board.list_events().items if "replied" in e.body][0]
-    assert "reply:api" in reply.refs and "cost:0.0200" in reply.refs and "turn:1" in reply.refs and any(x.startswith("session:") for x in reply.refs)
+    assert "reply:api" in reply.refs and "tokens:1000:50:4000" in reply.refs and "turn:1" in reply.refs and any(x.startswith("session:") for x in reply.refs)
 
 
 def test_cli_and_api_report(repo, monkeypatch, capsys):

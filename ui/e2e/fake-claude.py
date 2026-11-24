@@ -14,4 +14,5 @@ if os.environ.get("SWARM_ROLE") == "worker" and subprocess.run(["git", "rev-pars
     subprocess.run(["git", "add", "-A"], check=False, capture_output=True)
     subprocess.run(["git", "commit", "-qm", f"{worker}: notes"], check=False, capture_output=True)
 print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok",
-                  "total_cost_usd": 0.0123, "permission_denials": []}), flush=True)
+                  "total_cost_usd": 0.0123, "permission_denials": [],
+                  "usage": {"input_tokens": 200, "output_tokens": 340, "cache_creation_input_tokens": 12000, "cache_read_input_tokens": 51000}}), flush=True)

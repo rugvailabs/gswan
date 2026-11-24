@@ -1,4 +1,4 @@
-"""Run report: what was planned vs what happened, who said what, what it cost. Everything comes from the board db and git,
+"""Run report: what was planned vs what happened, who said what, how many tokens it used. Everything comes from the board db and git,
 so a human can audit a swarm after the fact without reading transcripts."""
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import decisions
+from . import decisions, tokens
 from .board import Board
 from .critics import Critiques
 from .limits import LimitsStore
@@ -38,20 +38,21 @@ def build(board: Board, root: Path) -> dict:
         out = [f for f in (files or []) if not in_scope(f, w.owns)]
         fs = crit.list(w.name)
         workers.append({"name": w.name, "goal": w.goal, "owns": w.owns, "status": w.status, "model": w.model, "turns": w.turns,
-                        "costUsd": round(w.cost_usd, 4), "branch": w.branch, "task": t.status, "failedRounds": t.rounds,
+                        "tokens": tokens.worker_view(w), "branch": w.branch, "task": t.status, "failedRounds": t.rounds,
                         "reasons": t.reasons, "filesChanged": files, "outOfScope": out,
                         "critiques": {s: sum(1 for f in fs if f.severity == s) for s in ("blocker", "major", "nit")},
                         "criticRounds": crit.rounds(w.name)})
     with board._conn() as c:
-        by_role = {r["role"]: round(r["cost"], 4) for r in c.execute(
-            "SELECT role, COALESCE(SUM(cost_usd),0) AS cost FROM workers WHERE swarm_id=? GROUP BY role", (sw.id,))}
+        by_role = {r["role"]: tokens.view(r["i"], r["o"], r["cw"], r["cr"]) for r in c.execute(
+            "SELECT role, COALESCE(SUM(tokens_in),0) AS i, COALESCE(SUM(tokens_out),0) AS o, COALESCE(SUM(tokens_cache_write),0) AS cw, "
+            "COALESCE(SUM(tokens_cache_read),0) AS cr FROM workers WHERE swarm_id=? GROUP BY role", (sw.id,))}
         n_roles = {r["role"]: r["n"] for r in c.execute("SELECT role, COUNT(*) AS n FROM workers WHERE swarm_id=? GROUP BY role", (sw.id,))}
     denied: list[str] = []
     log = root / ".swarm" / "denied.log"
     if log.is_file():
         denied = log.read_text().splitlines()[-20:]
     return {"swarmId": sw.id, "task": sw.task, "startedAt": sw.created_at, **LimitsStore(board).snapshot(),
-            "costByRole": by_role, "agentsByRole": n_roles, "workers": workers,
+            "tokensByRole": by_role, "agentsByRole": n_roles, "workers": workers,
             "plan": [e.body for e in by_kind("plan")], "decisions": [f"#{e.seq} {e.body}" for e in by_kind("decision")],
             "missingDecisions": [f"{o.tag} {o.ask}" for o in decisions.missing(board)],
             "research": [f"#{e.seq} {e.agent}: {e.body}" for e in by_kind("research")],
@@ -66,15 +67,16 @@ def markdown(d: dict) -> str:
     L = [f"# Run report — {d['task']}", "", f"swarm `{d['swarmId']}` · started {d['startedAt']} · {d['events']} board events", ""]
     u, lim = d["usage"], d["limits"]
     L += ["## Budget", f"workers {u['workers']}/{lim['max_workers']} · wake-ups {u['wakeups']}/{lim['max_wakeups']} · "
-          f"wall {u['wall_s']}s/{lim['max_wall_s']}s · cost ${u['cost_usd']}/${lim['max_cost_usd']}", "",
-          "Cost by role: " + (", ".join(f"{r} ${c} ({d['agentsByRole'].get(r, 0)} agents)" for r, c in d["costByRole"].items()) or "none"), ""]
-    L += ["## Plan vs actual", "", "| worker | goal | owns | files changed | out of scope | task | verifier fails | critic blk/maj/nit | cost |", "|---|---|---|---|---|---|---|---|---|"]
+          f"wall {u['wall_s']}s/{lim['max_wall_s']}s · tokens {tokens.fmt(u['tokens'])}/{tokens.fmt(lim['max_tokens'])} (input + output)"
+          + (f" · {tokens.fmt(u['tokens_cached'])} more read from cache" if u["tokens_cached"] else ""), "",
+          "Tokens by role: " + (", ".join(f"{r} {tokens.line(t)} ({d['agentsByRole'].get(r, 0)} agents)" for r, t in d["tokensByRole"].items()) or "none"), ""]
+    L += ["## Plan vs actual", "", "| worker | goal | owns | files changed | out of scope | task | verifier fails | critic blk/maj/nit | tokens in / out |", "|---|---|---|---|---|---|---|---|---|"]
     for w in d["workers"]:
         fc = "?" if w["filesChanged"] is None else str(len(w["filesChanged"]))
         oos = ", ".join(w["outOfScope"]) or "-"
         c = w["critiques"]
         L.append(f"| {w['name']} | {w['goal'][:60]} | {', '.join(w['owns'])} | {fc} | {oos} | {w['task']} | {w['failedRounds']} | "
-                 f"{c['blocker']}/{c['major']}/{c['nit']} | ${w['costUsd']} |")
+                 f"{c['blocker']}/{c['major']}/{c['nit']} | {tokens.fmt(w['tokens']['input'])} / {tokens.fmt(w['tokens']['output'])} |")
     if any(w["outOfScope"] for w in d["workers"]):
         L += ["", "**Scope drift:** at least one worker changed files outside its owned paths (see table)."]
     for title, key in (("Decisions", "decisions"), ("Decisions the coordinator has NOT explained", "missingDecisions"), ("Research findings", "research"), ("Critic findings", "critiques"),

@@ -13,7 +13,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from . import decisions
+from . import decisions, tokens
 from .board import Board, NoActiveSwarm
 from .cli import ensure_swarm_dir, find_root, open_board
 from .gate import Gate
@@ -64,16 +64,16 @@ class SwarmTools:
         except Exception:
             task = None
         return {"task": task, "name": w.name, "status": w.status, "busy": self._busy(w.name), "turns": w.turns,
-                "costUsd": round(w.cost_usd, 4), "owns": w.owns, "branch": w.branch, "model": w.model, "queue": self.runner.reg.queue_len(w),
+                "tokens": tokens.worker_view(w), "owns": w.owns, "branch": w.branch, "model": w.model, "queue": self.runner.reg.queue_len(w),
                 "recentTools": w.recent_tools, "lastActivity": w.last_activity, "activityNote": w.activity_note,
                 "worktree": w.worktree, "lastError": w.last_error, "lastResult": self.last.get(w.name)}
 
     # ---- coordinator tools ----------------------------------------------------
     def swarm_start(self, task: str, max_workers: int | None = None, max_wakeups: int | None = None,
-                    max_wall_s: int | None = None, max_cost_usd: float | None = None, critics: bool = False) -> dict:
-        """Start a swarm. Budgets default to 6 workers / 40 wake-ups / 3600s / $10; only a human can raise them later."""
+                    max_wall_s: int | None = None, max_tokens: int | None = None, critics: bool = False) -> dict:
+        """Start a swarm. Budgets default to 6 workers / 40 wake-ups / 3600s / 3M tokens (input + output); only a human can raise them later."""
         sw = self.board.start_swarm(task, limits={"max_workers": max_workers, "max_wakeups": max_wakeups,
-                                                   "max_wall_s": max_wall_s, "max_cost_usd": max_cost_usd})
+                                                   "max_wall_s": max_wall_s, "max_tokens": max_tokens})
         self.threads.clear(); self.last.clear(); self.cursor = 0
         self.gate.critic_model = os.environ.get("SWARM_CRITIC_MODEL") or ("sonnet" if critics else None)  # per-worker diff critics before the verifier
         return {"ok": True, "swarmId": sw.id, "task": sw.task, **self.runner.limits.snapshot()}
@@ -119,7 +119,7 @@ class SwarmTools:
         def run() -> None:
             try:
                 res = self.gate.invoke(name, message, sender=sender)
-                self.last[name] = {"ok": res.ok, "text": res.text[:SUMMARY_CHARS], "costUsd": res.cost_usd,
+                self.last[name] = {"ok": res.ok, "text": res.text[:SUMMARY_CHARS], "tokens": res.tokens,
                                    "denials": res.denials, "turns": res.turns_run, "queuedOnly": res.queued_only}
             except (RunnerError, WorkerError, NoActiveSwarm, ValueError) as e:
                 self.last[name] = {"ok": False, "text": str(e)}
@@ -237,7 +237,7 @@ def build_server(tools: SwarmTools, role: str = "coordinator") -> MCPServer:
             "Register a read-only research agent (repo + web, cites sources). `question` is one focused question. Wake it with "
             "invoke_worker; it posts `research` events. Max 4 per swarm. Use before planning or when a worker is blocked on facts."))
         srv.add_tool(tools.invoke_worker, name="invoke_worker", description=(
-            "@mention a worker with a message. Non-blocking; wakes the worker's persistent session (zero cost while idle). "
+            "@mention a worker with a message. Non-blocking; wakes the worker's persistent session (no tokens used while idle). "
             "Mentions sent while it is busy are queued and merged."))
         srv.add_tool(tools.wait_for_workers, name="wait_for_workers", description=(
             "Block (max ~110s) until the workers are idle; returns statuses, last results and new board events. "

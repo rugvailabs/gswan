@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from .board import Board, NoActiveSwarm
+from . import tokens
 from .models import EVENT_KINDS, Event, EventIn
 
 
@@ -220,7 +221,7 @@ def cmd_limits(b: Board, a) -> int:
             return 2
     snap = st.snapshot()
     for k in FIELDS:
-        use = {"max_workers": "workers", "max_wakeups": "wakeups", "max_wall_s": "wall_s", "max_cost_usd": "cost_usd"}[k]
+        use = {"max_workers": "workers", "max_wakeups": "wakeups", "max_wall_s": "wall_s", "max_tokens": "tokens"}[k]
         print(f"{k:<14} {snap['usage'][use]} / {snap['limits'][k]}")
     return 0
 
@@ -298,7 +299,7 @@ def cmd_worker(b: Board, a, root: Path) -> int:
             print(f"{w.id} {w.name} session={w.session_id}")
         elif a.wcmd == "list":
             for w in r.reg.list():
-                print(f"{w.name:<14} {w.status:<8} turns={w.turns} cost=${w.cost_usd:.3f} queue={r.reg.queue_len(w)} maxgap={w.max_gap_s:.0f}s owns={','.join(w.owns)}")
+                print(f"{w.name:<14} {w.status:<8} turns={w.turns} tokens={tokens.line(tokens.worker_view(w))} queue={r.reg.queue_len(w)} maxgap={w.max_gap_s:.0f}s owns={','.join(w.owns)}")
         elif a.wcmd == "invoke":
             res = gate.invoke(a.name, a.message, sender=a.sender)
             print(json.dumps(res.model_dump(by_alias=True), indent=2) if a.json else res.text)
@@ -361,7 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--task", action="append"); s.add_argument("--mode", action="append"); s.add_argument("--repeat", type=int, default=1)
     s.add_argument("--max-cost", type=float, default=3.0, help="USD cap per run for the top-level agent"); s.add_argument("--model", default="sonnet")
     s.add_argument("--dir", help="eval directory (default: evals/ in the plugin)"); s.add_argument("--yes", action="store_true")
-    s = sub.add_parser("report", help="run report: plan vs actual, decisions, research, critiques, verdicts, monitor actions, cost by role")
+    s = sub.add_parser("report", help="run report: plan vs actual, decisions, research, critiques, verdicts, monitor actions, tokens by role")
     s.add_argument("--out"); s.add_argument("--json", action="store_true")
     sub.add_parser("tasks", help="task statuses")
     s = sub.add_parser("integrate", help="merge done worker branches into the integration branch; --apply merges that into your branch")

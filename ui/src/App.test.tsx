@@ -20,12 +20,12 @@ const ev = (seq: number, agent: string, kind: BoardEvent["kind"], body: string):
   ({ seq, id: `evt_${seq}`, swarmId: "swm_1", ts: "2026-11-17T12:00:0" + seq + ".000000Z", agent, kind, body, taskId: null, refs: [] });
 
 const status: StatusResponse = {
-  ok: true, limits: { max_workers: 6, max_wakeups: 40, max_wall_s: 3600, max_cost_usd: 10 },
-  usage: { workers: 2, wakeups: 3, wall_s: 10, cost_usd: 0.032 }, allTasksSettled: false, unsettled: ["api"], digest: "", monitor: [{ worker: "api", state: "hung", detail: "no output for 20s" }],
+  ok: true, limits: { max_workers: 6, max_wakeups: 40, max_wall_s: 3600, max_tokens: 3000000 },
+  usage: { workers: 2, wakeups: 3, wall_s: 10, tokens: 131500, tokens_cached: 1200000 }, allTasksSettled: false, unsettled: ["api"], digest: "", monitor: [{ worker: "api", state: "hung", detail: "no output for 20s" }],
   workers: [
-    { name: "api", status: "running", busy: true, turns: 1, costUsd: 0.0123, owns: ["src/api"], branch: "swarm/swm_1/api", model: "haiku", queue: 1,
+    { name: "api", status: "running", busy: true, turns: 1, tokens: { input: 84000, output: 2500, cached: 1200000, total: 86500 }, owns: ["src/api"], branch: "swarm/swm_1/api", model: "haiku", queue: 1,
       lastActivity: new Date().toISOString(), activityNote: "tool:Bash", lastError: null, task: { id: "tsk_1", status: "verifying", failedRounds: 1, reasons: [] } },
-    { name: "ui", status: "idle", busy: false, turns: 2, costUsd: 0.02, owns: ["src/ui"], branch: null, model: "sonnet", queue: 0,
+    { name: "ui", status: "idle", busy: false, turns: 2, tokens: { input: 44100, output: 900, cached: 0, total: 45000 }, owns: ["src/ui"], branch: null, model: "sonnet", queue: 0,
       lastActivity: null, activityNote: null, lastError: null, task: { id: "tsk_2", status: "done", failedRounds: 0, reasons: [] } },
   ],
 };
@@ -79,9 +79,12 @@ describe("App", () => {
     expect(within(api).getByText(/monitor: hung/)).toBeInTheDocument();
     expect(within(api).getByText(/tool:Bash/)).toBeInTheDocument();
     expect(screen.getByLabelText("tasks done")).toHaveTextContent("1/2 tasks done");
-    expect(screen.getByLabelText("total cost")).toHaveTextContent("$0.032");
+    expect(screen.getByLabelText("total tokens")).toHaveTextContent("131.5k tokens");
+    expect(screen.getByLabelText("api tokens")).toHaveTextContent("84k in · 2.5k out");
+    expect(within(api).getByText("1.20M")).toBeInTheDocument(); // cached, shown apart
+    expect(screen.queryByText(/\$\d/)).not.toBeInTheDocument(); // no prices anywhere
     expect(screen.getByLabelText("budget")).toHaveTextContent("wake-ups 3/40");
-    expect(screen.getByLabelText("budget")).toHaveTextContent("spend $0.03/$10");
+    expect(screen.getByLabelText("budget")).toHaveTextContent("tokens 131.5k/3M");
     const board = screen.getByRole("region", { name: "board" });
     expect(within(board).getByText("split work")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("connection")).toHaveTextContent("live"));

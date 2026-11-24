@@ -50,14 +50,22 @@ export function eventTone(e: Pick<BoardEvent, "kind" | "body">): "ok" | "bad" | 
   }
 }
 
-export function summarize(workers: { costUsd: number; task: { status: string } | null }[]) {
-  const done = workers.filter((w) => w.task?.status === "done").length;
-  const cost = workers.reduce((a, w) => a + w.costUsd, 0);
-  return { total: workers.length, done, cost };
+/** 1234 -> 1.2k, 1234567 -> 1.23M (same rounding as the server's report). */
+export function fmtTokens(n: number): string {
+  if (n < 1000) return String(Math.round(n));
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`.replace(".0k", "k");
+  return `${(n / 1_000_000).toFixed(2)}M`.replace(".00M", "M");
 }
 
-/** "3/40 wake-ups · $0.12/$10" style budget line; each part turns warn at 80% and bad at 100%. */
-export function budgetParts(b: { limits?: { max_wakeups: number; max_cost_usd: number; max_workers: number }; usage?: { wakeups: number; cost_usd: number; workers: number } } | undefined) {
+export function summarize(workers: { tokens: { total: number; cached: number }; task: { status: string } | null }[]) {
+  const done = workers.filter((w) => w.task?.status === "done").length;
+  const tokens = workers.reduce((a, w) => a + w.tokens.total, 0);
+  const cached = workers.reduce((a, w) => a + w.tokens.cached, 0);
+  return { total: workers.length, done, tokens, cached };
+}
+
+/** "3/40 wake-ups · 120k/3M tokens" style budget line; each part turns warn at 80% and bad at 100%. */
+export function budgetParts(b: { limits?: { max_wakeups: number; max_tokens: number; max_workers: number }; usage?: { wakeups: number; tokens: number; workers: number } } | undefined) {
   if (!b?.limits || !b.usage) return [];
   const part = (label: string, used: number, cap: number, fmt: (n: number) => string) => {
     const r = cap > 0 ? used / cap : 0;
@@ -65,7 +73,7 @@ export function budgetParts(b: { limits?: { max_wakeups: number; max_cost_usd: n
   };
   return [
     part("wake-ups", b.usage.wakeups, b.limits.max_wakeups, (n) => String(n)),
-    part("spend", b.usage.cost_usd, b.limits.max_cost_usd, (n) => `$${Number.isInteger(n) ? n : n.toFixed(2)}`),
+    part("tokens", b.usage.tokens, b.limits.max_tokens, fmtTokens),
     part("workers", b.usage.workers, b.limits.max_workers, (n) => String(n)),
   ];
 }
@@ -137,14 +145,14 @@ export interface ReplayAgent {
   task: TaskStatus | null; // null for agents without a task (coordinator, verifiers, critics, researchers)
   last: BoardEvent;
   events: number;
-  costUsd: number; // from the cost reported with each turn reply
+  tokens: number; // input + output, from the count reported with each turn reply
   turns: number;
 }
 export interface ReplayState {
   at: BoardEvent | null;
   elapsedS: number;
   agents: ReplayAgent[];
-  costUsd: number;
+  tokens: number;
   tasks: number;
   tasksDone: number;
 }
@@ -180,21 +188,22 @@ export function replayState(events: BoardEvent[], index: number, taskWorkers: re
     if (NOT_ACTORS.has(name)) return null;
     let a = agents.get(name);
     if (!a) {
-      a = { name, task: owners.has(name) ? "open" : null, last: e, events: 0, costUsd: 0, turns: 0 };
+      a = { name, task: owners.has(name) ? "open" : null, last: e, events: 0, tokens: 0, turns: 0 };
       agents.set(name, a);
     }
     return a;
   };
-  let costUsd = 0;
+  let tokens = 0;
   for (const e of upTo) {
     const who = touch(speaker(e), e);
     if (who) { who.last = e; who.events += 1; }
     const target = mentionTarget(e);
     if (target) touch(target, e);
-    const cost = Number(e.refs.find((r) => r.startsWith("cost:"))?.slice(5) ?? 0) || 0;
+    const [tin, tout] = (e.refs.find((r) => r.startsWith("tokens:"))?.slice(7) ?? "").split(":").map((x) => Number(x) || 0); // tokens:<input>:<output>:<cached>
+    const used = (tin ?? 0) + (tout ?? 0);
     const turn = Number(e.refs.find((r) => r.startsWith("turn:"))?.slice(5) ?? 0) || 0;
-    costUsd += cost;
-    if (who) { who.costUsd += cost; who.turns = Math.max(who.turns, turn); }
+    tokens += used;
+    if (who) { who.tokens += used; who.turns = Math.max(who.turns, turn); }
     for (const [name, status] of taskChanges(e)) {
       const a = agents.get(name) ?? (owners.has(name) ? touch(name, e) : null);
       if (a && (a.task !== null || owners.has(name) || e.kind !== "done")) a.task = status;
@@ -204,7 +213,7 @@ export function replayState(events: BoardEvent[], index: number, taskWorkers: re
   const list = [...agents.values()].sort((a, b) => Number(b.task !== null) - Number(a.task !== null) || a.name.localeCompare(b.name));
   const withTask = list.filter((a) => a.task !== null);
   return {
-    at, agents: list, costUsd,
+    at, agents: list, tokens,
     elapsedS: at && events[0] ? Math.max(0, Math.round((Date.parse(at.ts) - Date.parse(events[0].ts)) / 1000)) : 0,
     tasks: withTask.length, tasksDone: withTask.filter((a) => a.task === "done").length,
   };

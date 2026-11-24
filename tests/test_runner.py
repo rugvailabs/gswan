@@ -43,7 +43,7 @@ class FakeClaude:
         if self.fail:
             return Exec(1, json.dumps({"is_error": True, "result": "boom"}), "")
         sid = cmd[cmd.index("--session-id") + 1] if "--session-id" in cmd else cmd[cmd.index("--resume") + 1]
-        return Exec(0, json.dumps({"result": f"ok:{cmd[2][:30]}", "session_id": sid, "total_cost_usd": 0.01,
+        return Exec(0, json.dumps({"result": f"ok:{cmd[2][:30]}", "session_id": sid, "total_cost_usd": 0.01, "usage": {"input_tokens": 100, "output_tokens": 50, "cache_creation_input_tokens": 900, "cache_read_input_tokens": 4000},
                                    "is_error": False, "permission_denials": [{"tool_name": t} for t in self.denials]}), "")
 
 
@@ -83,6 +83,7 @@ def test_first_turn_session_id_then_resume_and_worktree(repo, tmp_path):
     assert "--resume" in c2["cmd"] and c2["cmd"][c2["cmd"].index("--resume") + 1] == res.session_id
     w = r.reg.get("api")
     assert w.turns == 2 and w.status == "idle" and w.cost_usd == pytest.approx(0.02) and w.pid is None
+    assert (w.tokens_in, w.tokens_out, w.tokens_cache_write, w.tokens_cache_read) == (200, 100, 1800, 8000)  # summed over both turns
     assert w.branch.startswith("swarm/swm_")
 
 

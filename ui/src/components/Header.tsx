@@ -1,4 +1,4 @@
-import { budgetParts, summarize } from "../lib";
+import { budgetParts, fmtTokens, summarize } from "../lib";
 import { useStore } from "../store";
 
 export function Header() {
@@ -17,7 +17,7 @@ export function Header() {
         {status && (
           <>
             <span aria-label="tasks done">{sum.done}/{sum.total} tasks done</span>
-            <span aria-label="total cost" className="mono">${sum.cost.toFixed(3)}</span>
+            <span aria-label="total tokens" className="mono" title={`input + output across all agents${sum.cached ? `; ${fmtTokens(sum.cached)} more were read from cache` : ""}`}>{fmtTokens(sum.tokens)} tokens</span>
             {budget.length > 0 && (
               <span aria-label="budget" className="mono text-xs tone-muted">
                 {budget.map((p) => (

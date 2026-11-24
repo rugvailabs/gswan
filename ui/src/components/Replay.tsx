@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { clock, duration, eventTone, isReply, nextKeyMoment, replayState } from "../lib";
+import { clock, duration, eventTone, fmtTokens, isReply, nextKeyMoment, replayState } from "../lib";
 import { useStore } from "../store";
 import type { TaskStatus, WorkerView } from "../types";
 import { EventRow } from "./EventRow";
@@ -67,7 +67,7 @@ export function Replay() {
         <p aria-label="replay position" className="text-xs tone-muted">
           Event <span className="mono">{i + 1}</span> of <span className="mono">{events.length}</span>
           {state.at && <> · <span className="mono">{clock(state.at.ts)}</span> · {duration(state.elapsedS)} into the run</>}
-          {" · "}{state.tasksDone}/{state.tasks} tasks done · <span className="mono">${state.costUsd.toFixed(3)}</span> reported so far
+          {" · "}{state.tasksDone}/{state.tasks} tasks done · <span className="mono">{fmtTokens(state.tokens)}</span> tokens so far
         </p>
       </div>
       <ul aria-label="state at this moment" className="grid gap-x-4 gap-y-1 border-b p-3 text-xs sm:grid-cols-2" style={line}>
@@ -75,7 +75,7 @@ export function Replay() {
           <li key={a.name} className="flex min-w-0 items-baseline gap-2">
             <span className="mono shrink-0 font-medium">{a.name}</span>
             {a.task && <span className={`shrink-0 font-medium ${TASK_TONE[a.task]}`}>{a.task.replace("_", " ")}</span>}
-            {a.turns > 0 && <span className="mono shrink-0 tone-muted">{a.turns}t · ${a.costUsd.toFixed(3)}</span>}
+            {a.turns > 0 && <span className="mono shrink-0 tone-muted">{a.turns}t · {fmtTokens(a.tokens)}</span>}
             <span className="min-w-0 truncate tone-muted" title={a.last.body}>
               {a.events === 0 ? "mentioned, has not spoken yet" : <><span className={`tone-${eventTone(a.last)}`}>{isReply(a.last) ? "reply" : a.last.kind}</span> {a.last.body}</>}
             </span>

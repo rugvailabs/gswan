@@ -108,7 +108,11 @@ class Worker(CamelModel):
     worktree: str | None = None
     branch: str | None = None
     turns: int = 0
-    cost_usd: float = 0.0
+    cost_usd: float = 0.0  # the CLI's own estimate; recorded, not shown (tokens are)
+    tokens_in: int = 0
+    tokens_out: int = 0
+    tokens_cache_write: int = 0
+    tokens_cache_read: int = 0
     last_error: str | None = None
     pid: int | None = None
     role: Literal["worker", "verifier", "researcher", "critic"] = "worker"
@@ -146,6 +150,7 @@ class TurnResult(CamelModel):
     text: str
     session_id: str
     cost_usd: float = 0.0
+    tokens: dict[str, int] = Field(default_factory=dict)  # input / output / cached / total for the turns just run
     denials: list[str] = Field(default_factory=list)
     queued_only: bool = False  # True when the worker was already running and the message was queued
     turns_run: int = 0

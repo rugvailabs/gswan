@@ -129,7 +129,7 @@ function Budget() {
   const [v, setV] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   if (!lim) return <p className="text-sm tone-muted">No active swarm.</p>;
-  const rows: [string, string, number][] = [["maxWorkers", "Max workers", lim.max_workers], ["maxWakeups", "Max wake-ups (turns)", lim.max_wakeups], ["maxWallS", "Max wall time (s)", lim.max_wall_s], ["maxCostUsd", "Max cost (USD)", lim.max_cost_usd]];
+  const rows: [string, string, number][] = [["maxWorkers", "Max workers", lim.max_workers], ["maxWakeups", "Max wake-ups (turns)", lim.max_wakeups], ["maxWallS", "Max wall time (s)", lim.max_wall_s], ["maxTokens", "Max tokens (input + output)", lim.max_tokens]];
   async function save(ev: FormEvent) {
     ev.preventDefault();
     const body: Record<string, number> = {};

@@ -1,4 +1,4 @@
-"""Per-swarm budgets: workers, wake-ups (turns), wall time, cost. Exceeding one stops new turns and posts `blocked`.
+"""Per-swarm budgets: workers, wake-ups (turns), wall time, tokens (input + output; cache reads are not counted). Exceeding one stops new turns and posts `blocked`.
 Only a human raises limits (`swarm limits --set ...`); the coordinator can only choose them at swarm_start."""
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from .board import Board
 
-FIELDS = ("max_workers", "max_wakeups", "max_wall_s", "max_cost_usd")
+FIELDS = ("max_workers", "max_wakeups", "max_wall_s", "max_tokens")
 
 
 @dataclass
@@ -15,7 +15,7 @@ class Limits:
     max_workers: int = 6
     max_wakeups: int = 40
     max_wall_s: int = 3600
-    max_cost_usd: float = 10.0
+    max_tokens: int = 3_000_000
 
 
 class BudgetExceeded(Exception):
@@ -42,13 +42,13 @@ class LimitsStore:
                 continue
             if float(v) <= 0:
                 raise ValueError(f"{k} must be positive")
-            cur[k] = type(getattr(Limits, k))(v)
+            cur[k] = int(float(v))
         sw = self.b._require()
         with self.b._conn() as c:
-            c.execute("INSERT INTO swarm_limits (swarm_id,max_workers,max_wakeups,max_wall_s,max_cost_usd) VALUES (?,?,?,?,?) "
+            c.execute("INSERT INTO swarm_limits (swarm_id,max_workers,max_wakeups,max_wall_s,max_cost_usd,max_tokens) VALUES (?,?,?,?,0,?) "
                       "ON CONFLICT(swarm_id) DO UPDATE SET max_workers=excluded.max_workers, max_wakeups=excluded.max_wakeups, "
-                      "max_wall_s=excluded.max_wall_s, max_cost_usd=excluded.max_cost_usd",
-                      (sw.id, cur["max_workers"], cur["max_wakeups"], cur["max_wall_s"], cur["max_cost_usd"]))
+                      "max_wall_s=excluded.max_wall_s, max_tokens=excluded.max_tokens",
+                      (sw.id, cur["max_workers"], cur["max_wakeups"], cur["max_wall_s"], cur["max_tokens"]))
         return Limits(**cur)
 
     def usage(self, now: datetime | None = None) -> dict:
@@ -57,10 +57,11 @@ class LimitsStore:
         started = datetime.strptime(sw.created_at, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
         with self.b._conn() as c:
             r = c.execute("SELECT COALESCE(SUM(CASE WHEN role='worker' THEN 1 ELSE 0 END),0) AS workers, "
-                          "COALESCE(SUM(turns),0) AS wakeups, COALESCE(SUM(cost_usd),0) AS cost FROM workers WHERE swarm_id=?",
+                          "COALESCE(SUM(turns),0) AS wakeups, COALESCE(SUM(tokens_in+tokens_out+tokens_cache_write),0) AS tokens, "
+                          "COALESCE(SUM(tokens_cache_read),0) AS cached FROM workers WHERE swarm_id=?",
                           (sw.id,)).fetchone()
         return {"workers": r["workers"], "wakeups": r["wakeups"], "wall_s": int((now - started).total_seconds()),
-                "cost_usd": round(r["cost"], 4)}
+                "tokens": r["tokens"], "tokens_cached": r["cached"]}
 
     def check_define(self, exempt: bool = False) -> None:
         lim, use = self.get(), self.usage()
@@ -69,7 +70,7 @@ class LimitsStore:
 
     def check_turn(self, now: datetime | None = None) -> None:
         lim, use = self.get(), self.usage(now)
-        for key, cap, label in (("wakeups", lim.max_wakeups, "wake-ups"), ("wall_s", lim.max_wall_s, "wall time (s)"), ("cost_usd", lim.max_cost_usd, "cost (USD)")):
+        for key, cap, label in (("wakeups", lim.max_wakeups, "wake-ups"), ("wall_s", lim.max_wall_s, "wall time (s)"), ("tokens", lim.max_tokens, "tokens (input + output)")):
             if use[key] >= cap:
                 raise BudgetExceeded(f"swarm budget exhausted: {label} {use[key]}/{cap}. Stop and ask the user to raise it (`swarm limits --set ...`).")
 

@@ -180,10 +180,13 @@ class Registry:
             c.execute("UPDATE workers SET status='running', pid=?, updated_at=? WHERE id=?", (pid, utc_now(), w.id))
         return True
 
-    def finish_turn(self, w: Worker, *, ok: bool, cost: float = 0.0, error: str | None = None) -> None:
+    def finish_turn(self, w: Worker, *, ok: bool, cost: float = 0.0, error: str | None = None, tokens: dict[str, int] | None = None) -> None:
+        t = tokens or {}
         with self.b._conn() as c:
-            c.execute("UPDATE workers SET turns=turns+?, cost_usd=cost_usd+?, last_error=?, updated_at=? WHERE id=?",
-                      (1 if ok else 0, cost, None if ok else error, utc_now(), w.id))
+            c.execute("UPDATE workers SET turns=turns+?, cost_usd=cost_usd+?, tokens_in=tokens_in+?, tokens_out=tokens_out+?, "
+                      "tokens_cache_write=tokens_cache_write+?, tokens_cache_read=tokens_cache_read+?, last_error=?, updated_at=? WHERE id=?",
+                      (1 if ok else 0, cost, t.get("tokens_in", 0), t.get("tokens_out", 0), t.get("tokens_cache_write", 0),
+                       t.get("tokens_cache_read", 0), None if ok else error, utc_now(), w.id))
 
     def release(self, w: Worker, *, error: bool = False) -> None:
         with self.b._conn() as c:
