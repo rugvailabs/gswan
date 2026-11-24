@@ -48,7 +48,8 @@ function Card({ w, finding }: { w: WorkerView; finding?: MonitorFinding }) {
       {w.lastError && <p className="text-xs tone-bad">{w.lastError}</p>}
       <dl className="grid grid-cols-2 gap-x-3 text-xs tone-muted">
         <dt>owns</dt><dd className="mono truncate" title={w.owns.join(", ")}>{w.owns.join(", ")}</dd>
-        <dt>model</dt><dd>{w.model}</dd>
+        {w.group && (<><dt>group</dt><dd className="mono">@{w.group}</dd></>)}
+        <dt>model</dt><dd><ModelPicker w={w} /></dd>
         <dt>turns</dt><dd className="mono">{w.turns}</dd>
         <dt>tokens</dt><dd className="mono" aria-label={`${w.name} tokens`}>{fmtTokens(w.tokens.input)} in · {fmtTokens(w.tokens.output)} out</dd>
         {w.tokens.cached > 0 && (<><dt title="Re-read from the prompt cache. Large, cheap, and not counted in the budget.">cached</dt><dd className="mono">{fmtTokens(w.tokens.cached)}</dd></>)}
@@ -64,6 +65,23 @@ function Card({ w, finding }: { w: WorkerView; finding?: MonitorFinding }) {
         <button className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--line)" }} aria-pressed={diffWorker === w.name} onClick={() => openDiff(diffWorker === w.name ? null : w.name)}>diff</button>
       </div>
     </article>
+  );
+}
+
+const MODELS = ["haiku", "sonnet", "opus"];
+
+/** Switch an idle worker's model; it keeps its conversation. Locked while a turn runs. */
+function ModelPicker({ w }: { w: WorkerView }) {
+  const setModel = useStore((s) => s.setModel);
+  const running = w.status === "running";
+  const options = MODELS.includes(w.model) ? MODELS : [w.model, ...MODELS];
+  return (
+    <select aria-label={`${w.name} model`} value={w.model} disabled={running}
+      title={running ? "Locked while a turn runs" : "Next turn uses this model; the first one re-reads the conversation without the cache"}
+      onChange={(e) => void setModel(w.name, e.target.value).catch(() => { /* shown by the store */ })}
+      className="rounded border bg-transparent px-1 text-xs disabled:opacity-60" style={{ borderColor: "var(--line)", color: "var(--text)" }}>
+      {options.map((m) => <option key={m} value={m}>{m}</option>)}
+    </select>
   );
 }
 

@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 
 from .board import Board
 from .models import Worker, WorkerSpec, new_id, utc_now
 from .limits import BudgetExceeded, LimitsStore  # noqa: F401
 from .tasks import Tasks
+
+
+ALL = "all"
+MODEL = re.compile(r"sonnet|haiku|opus|claude-[a-z0-9.-]{1,60}")
 
 
 class WorkerError(Exception):
@@ -35,6 +40,7 @@ def _worker(r) -> Worker:
     d = dict(r)
     d["owns"], d["tools"] = json.loads(d["owns"]), json.loads(d["tools"])
     d["checks"] = json.loads(d.get("checks") or "[]")
+    d["group"] = d.pop("grp", None)
     d["recent_tools"] = json.loads(d.get("recent_tools") or "[]")
     return Worker(**d)
 
@@ -52,15 +58,21 @@ class Registry:
         now = utc_now()
         w = Worker(id=new_id("wrk"), swarm_id=sw.id, name=spec.name, goal=spec.goal, owns=spec.owns,
                    tools=spec.tools, model=spec.model, session_id=str(uuid.uuid4()), status="idle",
-                   checks=spec.checks, created_at=now, updated_at=now)
+                   checks=spec.checks, group=spec.group, created_at=now, updated_at=now)
+        if w.name == ALL or w.group == ALL:
+            raise WorkerError(f"'{ALL}' is reserved: @{ALL} reaches every worker")
         with self.b._conn() as c:
             if c.execute("SELECT 1 FROM workers WHERE swarm_id=? AND name=?", (sw.id, w.name)).fetchone():
                 raise WorkerError(f"worker '{w.name}' already exists in this swarm")
+            if c.execute("SELECT 1 FROM workers WHERE swarm_id=? AND grp=?", (sw.id, w.name)).fetchone():
+                raise WorkerError(f"'{w.name}' is already a group name; @{w.name} would be ambiguous")
+            if w.group and c.execute("SELECT 1 FROM workers WHERE swarm_id=? AND name=?", (sw.id, w.group)).fetchone():
+                raise WorkerError(f"group '{w.group}' has the same name as a worker; @{w.group} would be ambiguous")
             c.execute(
-                "INSERT INTO workers (id,swarm_id,name,goal,owns,tools,model,session_id,status,checks,created_at,updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO workers (id,swarm_id,name,goal,owns,tools,model,session_id,status,checks,grp,created_at,updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (w.id, w.swarm_id, w.name, w.goal, json.dumps(w.owns), json.dumps(w.tools), w.model,
-                 w.session_id, w.status, json.dumps(w.checks), now, now))
+                 w.session_id, w.status, json.dumps(w.checks), w.group, now, now))
         Tasks(self.b).ensure(w.name, w.goal)
         return w
 
@@ -134,6 +146,40 @@ class Registry:
         if r is None:
             raise WorkerError(f"no worker named '{name}' in the active swarm")
         return _worker(r)
+
+    def resolve(self, target: str) -> list[Worker]:
+        """`@target`: a worker name, a group name, or `all` (every worker except the integrator)."""
+        workers = self.list()
+        if target == ALL:
+            return [w for w in workers if w.name != "integrator"]
+        named = [w for w in self.list(include_verifiers=True) if w.name == target]
+        if named:
+            return named
+        members = [w for w in workers if w.group == target]
+        if not members:
+            groups = sorted({w.group for w in workers if w.group})
+            raise WorkerError(f"no worker or group named '{target}' (groups: {', '.join(groups) or 'none'}; or @{ALL})")
+        return members
+
+    def groups(self) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        for w in self.list():
+            if w.group:
+                out.setdefault(w.group, []).append(w.name)
+        return out
+
+    def set_model(self, name: str, model: str) -> tuple[str, Worker]:
+        """Move an idle worker to another model; its session (conversation) is kept. Returns (old model, worker)."""
+        if not MODEL.fullmatch(model):
+            raise WorkerError("model must be sonnet, haiku, opus or a full claude-* model id")
+        w = self.get(name)
+        if w.role != "worker":
+            raise WorkerError("only workers can change model (verifiers use SWARM_VERIFIER_MODEL)")
+        if w.status == "running" and pid_alive(w.pid):
+            raise WorkerError(f"{name} is running a turn; change its model when it is idle")
+        with self.b._conn() as c:
+            c.execute("UPDATE workers SET model=?, updated_at=? WHERE id=?", (model, utc_now(), w.id))
+        return w.model, self.get(name)
 
     def list_researchers(self) -> list[Worker]:
         return [w for w in self.list(include_verifiers=True) if w.role == "researcher"]

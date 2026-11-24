@@ -13,15 +13,16 @@ interface State {
   kinds: ReadonlySet<EventKind>;
   agent: string | null;
   mentionTarget: string | null;
-  view: "board" | "threads" | "replay";
+  view: "board" | "threads" | "replay" | "graph";
   threadAgent: string | null;
   diffWorker: string | null;
   openDiff: (w: string | null) => void;
-  setView: (v: "board" | "threads" | "replay") => void;
+  setView: (v: "board" | "threads" | "replay" | "graph") => void;
   openThread: (a: string) => void;
   addWorker: (w: WorkerDraft) => Promise<void>;
   setLimits: (l: LimitsDraft) => Promise<void>;
   decide: (id: string, decision: ApprovalDecision, note?: string) => Promise<void>;
+  setModel: (worker: string, model: string) => Promise<void>;
   setToken: (t: string | null) => void;
   addEvents: (e: BoardEvent[]) => void;
   toggleKind: (k: EventKind) => void;
@@ -60,6 +61,9 @@ export const useStore = create<State>((set, get) => ({
   },
   decide: async (id, decision, note = "") => {
     try { await api.decide(get().token, id, decision, note); set({ error: null }); await get().refresh(); } catch (e) { set({ error: msg(e) }); throw e; }
+  },
+  setModel: async (worker, model) => {
+    try { await api.setModel(get().token, worker, model); set({ error: null }); await get().refresh(); } catch (e) { set({ error: msg(e) }); throw e; }
   },
   setToken: (token) => set({ token }),
   addEvents: (incoming) => set((s) => ({ events: mergeEvents(s.events, incoming) })),

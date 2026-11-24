@@ -110,7 +110,7 @@ class SwarmTools:
             task = None
         return {"task": task, "name": w.name, "status": w.status, "busy": self._busy(w.name), "turns": w.turns,
                 "tokens": tokens.worker_view(w), "owns": w.owns, "branch": w.branch, "model": w.model, "queue": self.runner.reg.queue_len(w),
-                "recentTools": w.recent_tools, "checks": w.checks, "lastActivity": w.last_activity, "activityNote": w.activity_note,
+                "recentTools": w.recent_tools, "checks": w.checks, "group": w.group, "lastActivity": w.last_activity, "activityNote": w.activity_note,
                 "worktree": w.worktree, "lastError": w.last_error, "lastResult": self.last.get(w.name)}
 
     # ---- coordinator tools ----------------------------------------------------
@@ -124,10 +124,10 @@ class SwarmTools:
         return {"ok": True, "swarmId": sw.id, "task": sw.task, **self.runner.limits.snapshot()}
 
     def define_worker(self, name: str, goal: str, owns: list[str], tools: list[str] | None = None,
-                      model: str = "sonnet", checks: list[str] | None = None) -> dict:
+                      model: str = "sonnet", checks: list[str] | None = None, group: str | None = None) -> dict:
         from . import bashpolicy
         try:
-            spec = WorkerSpec(name=name, goal=goal, owns=owns, tools=tools or [], model=model, checks=checks or [])
+            spec = WorkerSpec(name=name, goal=goal, owns=owns, tools=tools or [], model=model, checks=checks or [], group=group or None)
             for c in spec.checks:  # a check the verifier is not allowed to run would make every pass impossible
                 try:
                     bashpolicy.check(c, role="verifier", worktree=str(self.runner.root), cwd=None, grants=spec.tools,
@@ -137,7 +137,7 @@ class SwarmTools:
             w = self.runner.define(spec)
         except (ValueError, WorkerError, NoActiveSwarm) as e:
             return self._err(e)
-        return {"ok": True, "worker": w.name, "id": w.id, "owns": w.owns, "checks": w.checks}
+        return {"ok": True, "worker": w.name, "id": w.id, "owns": w.owns, "checks": w.checks, "group": w.group}
 
     def critique_plan(self, plan: str, model: str = "sonnet") -> dict:
         """Start a read-only plan critic on your plan BEFORE invoking workers. Findings arrive as `critique` events on target `plan`."""
@@ -163,15 +163,22 @@ class SwarmTools:
         return {"ok": True, "researcher": w.name, "id": w.id}
 
     def invoke_worker(self, name: str, message: str, sender: str = "coordinator") -> dict:
-        """@mention a worker. Returns immediately; the turn runs in the background."""
+        """@mention a worker, a group, or `all`. Returns immediately; the turns run in the background."""
         try:
-            self.runner.reg.get(name)
+            targets = self.runner.reg.resolve(name)
         except (WorkerError, NoActiveSwarm) as e:
             return self._err(e)
+        if len(targets) > 1 or targets[0].name != name:  # a group: one board event, one turn per member
+            self.board.post(EventIn(agent=sender, kind="mention", body=f"@{name} {message}"[:8000], refs=[f"to:{t.name}" for t in targets]))
+            started = [t.name for t in targets if self._start(t.name, message, sender, announce=False)]
+            return {"ok": True, "started": started, "group": name}
+        self._start(name, message, sender)
+        return {"ok": True, "started": name}
 
+    def _start(self, name: str, message: str, sender: str, announce: bool = True) -> bool:
         def run() -> None:
             try:
-                res = self.gate.invoke(name, message, sender=sender)
+                res = self.gate.invoke(name, message, sender=sender, announce=announce)
                 self.last[name] = {"ok": res.ok, "text": res.text[:SUMMARY_CHARS], "tokens": res.tokens,
                                    "denials": res.denials, "turns": res.turns_run, "queuedOnly": res.queued_only}
             except (RunnerError, WorkerError, NoActiveSwarm, ValueError) as e:
@@ -181,7 +188,21 @@ class SwarmTools:
             t = threading.Thread(target=run, name=f"worker-{name}", daemon=True)
             self.threads[name] = t
             t.start()
-        return {"ok": True, "started": name}
+        return True
+
+    def set_worker_model(self, worker: str, model: str, why: str = "", by: str = "coordinator") -> dict:
+        """Move an idle worker to another model; it keeps its conversation. The reason is recorded as a decision."""
+        why = why.strip()
+        if by != "human" and len(why) < decisions.MIN_WHY:
+            return self._err(ValueError(f"say why you are changing the model (at least {decisions.MIN_WHY} characters), e.g. 'parser is simple, haiku is enough'"))
+        try:
+            old, w = self.runner.reg.set_model(worker, model)
+        except (WorkerError, NoActiveSwarm) as e:
+            return self._err(e)
+        if old != model:
+            decisions.record(self.board, "other", f"{worker} model {old} -> {model}: {why or 'changed by a human from the dashboard or CLI'}",
+                             agent="human" if by == "human" else "coordinator")
+        return {"ok": True, "worker": worker, "from": old, "to": w.model}
 
     def wait_for_workers(self, names: list[str] | None = None, timeout_s: float = 90) -> dict:
         """Block until the named workers (default: all) are idle with empty queues, or timeout."""
@@ -287,7 +308,7 @@ def build_server(tools: SwarmTools, role: str = "coordinator") -> MCPServer:
         srv.add_tool(tools.swarm_start, name="swarm_start", description="Start a new swarm for a task (archives the previous one).")
         srv.add_tool(tools.define_worker, name="define_worker", description=(
             "Register a named worker: goal, owns (paths it may write, relative to its own git worktree; must not overlap "
-            "other workers), optional extra allowed tools like 'Bash(pytest:*)', model (sonnet|haiku|opus), and checks: the exact "
+            "other workers), optional group (message every member at once with @<group>), optional extra allowed tools like 'Bash(pytest:*)', model (sonnet|haiku|opus), and checks: the exact "
             "commands that prove the goal (e.g. 'python3 -m pytest tests/test_api.py'). The verifier must run every check before it "
             "may pass the task, and the integration verifier runs all of them on the merged branch; each must be allowed by tools."))
         srv.add_tool(tools.critique_plan, name="critique_plan", description=(
@@ -299,7 +320,11 @@ def build_server(tools: SwarmTools, role: str = "coordinator") -> MCPServer:
             "invoke_worker; it posts `research` events. Max 4 per swarm. Use before planning or when a worker is blocked on facts."))
         srv.add_tool(tools.invoke_worker, name="invoke_worker", description=(
             "@mention a worker with a message. Non-blocking; wakes the worker's persistent session (no tokens used while idle). "
-            "Mentions sent while it is busy are queued and merged."))
+            "Mentions sent while it is busy are queued and merged. `name` may also be a group (every member) or `all` (every worker)."))
+        srv.add_tool(tools.set_worker_model, name="set_worker_model", description=(
+            "Move an idle worker to another model (sonnet|haiku|opus); it keeps its conversation. `why` is required and recorded "
+            "as a decision. The first turn on the new model re-reads the whole conversation without the prompt cache, so it costs "
+            "more than a normal turn. Ask the user before moving to a more expensive model."))
         srv.add_tool(tools.wait_for_workers, name="wait_for_workers", description=(
             "Block (max ~110s) until the workers are idle; returns statuses, last results and new board events. "
             "Check `timedOut` and call again to keep waiting."))

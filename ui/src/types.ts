@@ -41,6 +41,7 @@ export interface WorkerView {
   owns: string[];
   branch: string | null;
   model: string;
+  group?: string | null;
   queue: number;
   lastActivity: string | null;
   activityNote: string | null;

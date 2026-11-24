@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -60,6 +60,7 @@ beforeEach(() => {
     if (url === "/workers" && init?.method === "POST") return json({ ok: true, worker: "docs" }, 201);
     if (url === "/limits" && init?.method === "POST") return json({ ok: true }, 200);
     if (url.startsWith("/approvals/") && init?.method === "POST") return json({ ok: true, approval: {} }, 200);
+    if (url === "/workers/ui/model" && init?.method === "POST") return json({ ok: true, from: "sonnet", to: "haiku" }, 200);
     if (url === "/workers/api/diff") return json(diff);
     if (url === "/workers/ui/diff") return json({ message: "no worker named 'ui' in the active swarm" }, 404);
     if (url.startsWith("/workers/api/mentions")) return json({ ok: true, started: "api" }, 202);
@@ -258,6 +259,34 @@ describe("App", () => {
       await waitFor(() => expect(JSON.parse(String(calls.find((c) => c.url === "/limits")?.init?.body))).toEqual({ maxWakeups: 60 }));
     } finally {
       Object.assign(status, saved); delete status.pause; delete status.pendingApprovals;
+    }
+  });
+
+  it("switches an idle worker's model, offers groups and @all, and draws who messaged whom", async () => {
+    status.workers[0]!.group = "backend"; status.workers[1]!.group = "backend";
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText("taking api");
+      expect((screen.getByLabelText("api model") as HTMLSelectElement).disabled).toBe(true); // running: locked
+      await user.selectOptions(screen.getByLabelText("ui model"), "haiku");
+      await waitFor(() => expect(JSON.parse(String(calls.find((c) => c.url === "/workers/ui/model")?.init?.body))).toEqual({ model: "haiku" }));
+      const send = screen.getByRole("form", { name: "send" });
+      expect(within(send).getByRole("option", { name: "@backend (group: api, ui)" })).toBeTruthy();
+      expect(within(send).getByRole("option", { name: "@all (every worker)" })).toBeTruthy();
+      FakeES.last!.emit({ ...ev(5, "coordinator", "mention", "@backend start"), refs: ["to:api", "to:ui"] });
+      FakeES.last!.emit({ ...ev(6, "api", "mention", "@ui need the types"), refs: ["to:ui"] });
+      await user.click(screen.getByRole("tab", { name: "Graph" }));
+      const table = await screen.findByRole("table", { name: "messages between agents" });
+      expect(within(table).getAllByRole("row").map((r) => r.textContent)).toEqual(["fromtomessages", "apiui1", "coordinatorapi1", "coordinatorui1"]);
+      expect(screen.getByRole("img", { name: "who messaged whom" })).toBeTruthy();
+      await user.click(screen.getByRole("tab", { name: "Graph" }));
+      const slider = screen.getByLabelText("graph position");
+      fireEvent.change(slider, { target: { value: "0" } }); // back to the first message
+      expect(screen.getByRole("button", { name: "go live" })).toBeTruthy();
+      await waitFor(() => expect(within(screen.getByRole("table", { name: "messages between agents" })).getAllByRole("row")).toHaveLength(3));
+    } finally {
+      delete status.workers[0]!.group; delete status.workers[1]!.group;
     }
   });
 

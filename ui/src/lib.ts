@@ -243,3 +243,36 @@ export function duration(s: number): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
+
+export interface GraphEdge { from: string; to: string; count: number }
+export interface MentionGraph { nodes: string[]; edges: GraphEdge[]; lastSeq: number }
+
+/** Who messaged whom, from `mention` events up to `uptoSeq` (inclusive; default: everything). A group or @all message
+ * counts once per recipient (its `to:<name>` refs); older events without refs fall back to the `@target` in the body. */
+export function mentionGraph(events: Pick<BoardEvent, "seq" | "kind" | "agent" | "body" | "refs">[], uptoSeq = Infinity): MentionGraph {
+  const counts = new Map<string, GraphEdge>();
+  const nodes = new Set<string>();
+  let lastSeq = 0;
+  for (const e of events) {
+    if (e.kind !== "mention" || e.seq > uptoSeq) continue;
+    const refs = e.refs.filter((r) => r.startsWith("to:")).map((r) => r.slice(3));
+    const to = refs.length ? refs : [mentionTarget(e)].filter((x): x is string => !!x);
+    for (const t of to) {
+      if (t === e.agent) continue;
+      const k = `${e.agent}\u0000${t}`;
+      const edge = counts.get(k) ?? { from: e.agent, to: t, count: 0 };
+      edge.count += 1;
+      counts.set(k, edge);
+      nodes.add(e.agent); nodes.add(t);
+    }
+    lastSeq = Math.max(lastSeq, e.seq);
+  }
+  // human and coordinator first, swarmd last, each verifier/critic right after the worker it checks (so their arrows stay short)
+  const base = (n: string) => n.replace(/^verify-/, "").replace(/^critic-(.+)-[a-z]+$/, "$1");
+  const rank = (n: string) => (n === "human" ? 0 : n === "coordinator" ? 1 : n === "swarmd" ? 3 : 2);
+  return {
+    nodes: [...nodes].sort((a, b) => rank(a) - rank(b) || base(a).localeCompare(base(b)) || Number(a !== base(a)) - Number(b !== base(b)) || a.localeCompare(b)),
+    edges: [...counts.values()].sort((a, b) => b.count - a.count || a.from.localeCompare(b.from) || a.to.localeCompare(b.to)),
+    lastSeq,
+  };
+}

@@ -7,7 +7,7 @@ Modelled on the behaviour described for Google Antigravity's `/swarm` (coordinat
 ## Run report
 `swarm report` (also the **Run report** panel in the UI, or `GET /report`) shows, after or during a run: budget and tokens by role, each worker's planned paths vs the files its branch actually changed (scope drift is flagged), the coordinator's recorded decisions (and any required one it never explained), research findings with sources, critic findings, verifier verdicts, monitor actions with the rule that fired, and recent denied tool calls.
 
-Each worker card in the dashboard also has a **diff** button: the files its branch changed since its base commit, with line-numbered patches, files outside its owned paths flagged, and the critic findings and verifier verdicts shown next to the code they refer to. Only committed changes are shown; uncommitted paths are listed by name. The board also has a **Replay** tab: step or play through the run event by event and see each agent's task status, last message and cost as they stood at that moment.
+Each worker card in the dashboard also has a **diff** button: the files its branch changed since its base commit, with line-numbered patches, files outside its owned paths flagged, and the critic findings and verifier verdicts shown next to the code they refer to. Only committed changes are shown; uncommitted paths are listed by name. The board also has a **Graph** tab (who messaged whom, arrows weighted by count, a slider to see it at any point, and a table of the same data) and a **Replay** tab: step or play through the run event by event and see each agent's task status, last message and cost as they stood at that moment.
 
 ## Evals
 `swarm eval` compares one agent against the swarm modes (`single`, `swarm`, `swarm+research`, `swarm+critics`, `swarm+all`) on fixed tasks in `evals/tasks/`, scored by hidden tests the agents never see. It spends real money, so it is a dry run (it prints the run count and worst-case spend) until you add `--yes`. Example: `swarm eval --task textkit --mode single --mode swarm --repeat 3 --max-cost 2 --yes`; results land in `evals/results/`.
@@ -37,7 +37,9 @@ swarm integrate --apply      # merges the integration branch into your current b
 ```
 Give the coordinator `Bash(python3:*)` (or your test command) if you want it to run the tests in the integration worktree.
 
-Workers can also ask each other for things (`swarm mention <worker> "..."`, delivered by the monitor within ~15 s, max 5 messages per pair).
+Workers can also ask each other for things (`swarm mention <worker> "..."`, delivered by the monitor within ~15 s, max 5 messages per pair). Workers can belong to a `group`: `@<group>` reaches every member and `@all` every worker, from the coordinator, the dashboard, the CLI or another worker (one board event; the per-pair cap still counts each recipient).
+
+Switch an idle worker to another model without losing its conversation: the model menu on its card, `swarm worker model <name> haiku --why "..."`, or the coordinator's `set_worker_model` (which must say why; the reason is recorded as a decision). The first turn on the new model re-reads the conversation without the prompt cache, so it costs more than usual.
 
 Budgets protect you: each swarm defaults to 6 workers, 40 wake-ups, 1 hour and 3M tokens (input + output; tokens re-read from the prompt cache are shown but not counted). The coordinator can pick lower or higher values at `swarm_start` (tell it in your prompt); only you can raise them mid-run: `swarm limits --set max_tokens=6000000`. When a budget is hit, workers stop, a `blocked` event is posted and queued messages wait.
 

@@ -3,6 +3,12 @@ import { useStore } from "../store";
 
 const NO_WORKERS: never[] = [];
 
+function groupsOf(workers: { name: string; group?: string | null }[]): [string, string[]][] {
+  const m = new Map<string, string[]>();
+  for (const w of workers) if (w.group) m.set(w.group, [...(m.get(w.group) ?? []), w.name]);
+  return [...m.entries()];
+}
+
 export function MentionBox() {
   const status = useStore((s) => s.status);
   const workers = status?.workers ?? NO_WORKERS;  // selector must return a stable reference (a fresh [] loops forever)
@@ -50,6 +56,8 @@ export function MentionBox() {
           <select value={worker} onChange={(e) => setTarget(e.target.value)} className="rounded border bg-transparent px-2 py-1 text-sm" style={{ borderColor: "var(--line)", color: "var(--text)" }}>
             {workers.length === 0 && <option value="">no workers</option>}
             {workers.map((w) => <option key={w.name} value={w.name}>@{w.name}</option>)}
+            {groupsOf(workers).map(([g, names]) => <option key={`g-${g}`} value={g}>@{g} (group: {names.join(", ")})</option>)}
+            {workers.length > 1 && <option value="all">@all (every worker)</option>}
           </select>
         </label>
       )}

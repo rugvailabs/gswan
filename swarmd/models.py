@@ -94,6 +94,7 @@ class WorkerSpec(CamelModel):
     tools: list[str] = Field(default_factory=list, max_length=32)  # extra allowed tools, e.g. "Bash(pytest:*)"
     model: str = "sonnet"
     checks: list[str] = Field(default_factory=list, max_length=8)  # commands the verifier MUST run before it may pass the task
+    group: str | None = Field(default=None, max_length=32, pattern=r"^[a-z][a-z0-9-]*$")  # `@<group>` reaches every member
 
     @field_validator("checks")
     @classmethod
@@ -114,6 +115,7 @@ class Worker(CamelModel):
     model: str
     session_id: str
     checks: list[str] = Field(default_factory=list)
+    group: str | None = None
     status: WorkerStatus
     worktree: str | None = None
     branch: str | None = None

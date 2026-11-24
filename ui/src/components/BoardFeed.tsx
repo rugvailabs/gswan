@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { filterEvents } from "../lib";
 import { EventRow } from "./EventRow";
+import { Graph } from "./Graph";
 import { Replay } from "./Replay";
 import { Threads } from "./Threads";
 import { useStore } from "../store";
@@ -26,13 +27,13 @@ export function BoardFeed() {
   return (
     <section aria-label="board" className="flex min-h-[24rem] flex-col rounded-lg border" style={{ backgroundColor: "var(--panel)", borderColor: "var(--line)" }}>
       <div role="tablist" aria-label="view" className="flex gap-1 border-b p-2 text-sm" style={{ borderColor: "var(--line)" }}>
-        {(["board", "threads", "replay"] as const).map((v) => (
+        {(["board", "threads", "replay", "graph"] as const).map((v) => (
           <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} className="rounded px-3 py-1" style={{ backgroundColor: view === v ? "var(--line)" : "transparent" }}>
-            {v === "board" ? "Board (everything)" : v === "threads" ? "Conversations (per agent)" : "Replay"}
+            {v === "board" ? "Board (everything)" : v === "threads" ? "Conversations (per agent)" : v === "replay" ? "Replay" : "Graph"}
           </button>
         ))}
       </div>
-      {view === "threads" ? <Threads /> : view === "replay" ? <Replay /> : <>
+      {view === "threads" ? <Threads /> : view === "replay" ? <Replay /> : view === "graph" ? <Graph /> : <>
       <div className="flex flex-wrap items-center gap-2 border-b p-3 text-xs" style={{ borderColor: "var(--line)" }}>
         {EVENT_KINDS.map((k) => (
           <button key={k} aria-pressed={kinds.has(k)} onClick={() => toggleKind(k)} className="rounded-full border px-2 py-0.5"

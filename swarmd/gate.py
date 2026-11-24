@@ -26,9 +26,9 @@ class Gate:
         self.tasks, self.verifier_model = Tasks(runner.board), verifier_model
         self.critic_model, self.personas, self.crit = critic_model, personas, Critiques(runner.board)  # critic_model None = critics off
 
-    def invoke(self, name: str, message: str, sender: str = "coordinator") -> TurnResult:
+    def invoke(self, name: str, message: str, sender: str = "coordinator", announce: bool = True) -> TurnResult:
         """@mention a worker, then verify/iterate until its task settles."""
-        res = self.runner.invoke(name, message, sender=sender)
+        res = self.runner.invoke(name, message, sender=sender, announce=announce)
         if res.queued_only or not res.ok or self.runner.reg.get(name).role != "worker":
             return res  # researchers change nothing, so there is nothing to verify
         self.settle(name)

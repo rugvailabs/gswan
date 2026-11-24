@@ -282,11 +282,17 @@ def cmd_mention(b: Board, a, root: Path) -> int:
     if role == "worker" and sender:
         out = Runner(b, root).enqueue_mention(sender, a.target, a.message)
     else:  # a human at a terminal: same effect as the UI box, but queue-only (a running monitor/server wakes it)
+        from .workers import WorkerError
         r = Runner(b, root)
-        w = r.reg.get(a.target)
-        b.post(EventIn(agent="human", kind="mention", body=f"@{a.target} {a.message}"[:8000]))
-        r.reg.enqueue(w, "human", a.message)
-        out = {"ok": True, "queued": a.target}
+        try:
+            ws = r.reg.resolve(a.target)
+        except WorkerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        b.post(EventIn(agent="human", kind="mention", body=f"@{a.target} {a.message}"[:8000], refs=[f"to:{w.name}" for w in ws]))
+        for w in ws:
+            r.reg.enqueue(w, "human", a.message)
+        out = {"ok": True, "queued": ", ".join(w.name for w in ws)}
     if not out["ok"]:
         print(f"error: {out['error']}", file=sys.stderr)
         return 2
@@ -336,11 +342,22 @@ def cmd_worker(b: Board, a, root: Path) -> int:
     gate = Gate(r)
     try:
         if a.wcmd == "define":
-            w = r.define(WorkerSpec(name=a.name, goal=a.goal, owns=a.owns, tools=a.tool or [], model=a.model, checks=a.check or []))
+            w = r.define(WorkerSpec(name=a.name, goal=a.goal, owns=a.owns, tools=a.tool or [], model=a.model, checks=a.check or [], group=a.group))
             print(f"{w.id} {w.name} session={w.session_id}")
         elif a.wcmd == "list":
             for w in r.reg.list():
-                print(f"{w.name:<14} {w.status:<8} turns={w.turns} tokens={tokens.line(tokens.worker_view(w))} queue={r.reg.queue_len(w)} maxgap={w.max_gap_s:.0f}s owns={','.join(w.owns)}")
+                grp = f" group={w.group}" if w.group else ""
+                print(f"{w.name:<14} {w.status:<8} {w.model:<7} turns={w.turns} tokens={tokens.line(tokens.worker_view(w))} queue={r.reg.queue_len(w)} maxgap={w.max_gap_s:.0f}s owns={','.join(w.owns)}{grp}")
+        elif a.wcmd == "model":
+            if os.environ.get("SWARM_ROLE"):
+                print("error: agents change models through the coordinator's set_worker_model", file=sys.stderr)
+                return 3
+            from .mcp_server import SwarmTools
+            out = SwarmTools(b, r, gate).set_worker_model(a.name, a.model, a.why, by="human")
+            if not out["ok"]:
+                print(f"error: {out['error']}", file=sys.stderr)
+                return 2
+            print(f"{a.name}: {out['from']} -> {out['to']} (its next turn uses the new model)")
         elif a.wcmd == "invoke":
             res = gate.invoke(a.name, a.message, sender=a.sender)
             print(json.dumps(res.model_dump(by_alias=True), indent=2) if a.json else res.text)
@@ -391,6 +408,9 @@ def build_parser() -> argparse.ArgumentParser:
     x = w.add_parser("define"); x.add_argument("name"); x.add_argument("--goal", required=True)
     x.add_argument("--owns", nargs="+", required=True); x.add_argument("--tool", action="append"); x.add_argument("--model", default="sonnet")
     x.add_argument("--check", action="append", help="command the verifier must run before passing (repeatable)")
+    x.add_argument("--group", help="group name: `mention <group>` reaches every member")
+    x = w.add_parser("model", help="human: move an idle worker to another model (keeps its conversation)")
+    x.add_argument("name"); x.add_argument("model"); x.add_argument("--why", default="")
     w.add_parser("list")  # workers only
     x = w.add_parser("invoke"); x.add_argument("name"); x.add_argument("message"); x.add_argument("--sender", default="coordinator")
     x.add_argument("--json", action="store_true")

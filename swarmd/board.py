@@ -80,7 +80,7 @@ class Board:
                              ("max_gap_s", "REAL NOT NULL DEFAULT 0"), ("recent_tools", "TEXT NOT NULL DEFAULT '[]'"),
                              ("tokens_in", "INTEGER NOT NULL DEFAULT 0"), ("tokens_out", "INTEGER NOT NULL DEFAULT 0"),
                              ("tokens_cache_write", "INTEGER NOT NULL DEFAULT 0"), ("tokens_cache_read", "INTEGER NOT NULL DEFAULT 0"),
-                             ("checks", "TEXT NOT NULL DEFAULT '[]'")):
+                             ("checks", "TEXT NOT NULL DEFAULT '[]'"), ("grp", "TEXT")):
                 if col not in have:
                     c.execute(f"ALTER TABLE workers ADD COLUMN {col} {ddl}")
             if "max_tokens" not in {r["name"] for r in c.execute("PRAGMA table_info(swarm_limits)")}:  # budgets were in USD before

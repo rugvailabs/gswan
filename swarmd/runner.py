@@ -273,8 +273,11 @@ class Runner:
             others = []
         if not others:
             return ""
-        lines = "; ".join(f"{o.name} (owns {', '.join(o.owns)}: {o.goal[:80]})" for o in others)
-        return (f"Teammates: {lines}. To ask one for something you need, run `{self.cli} mention <worker> \"<message>\"` "
+        lines = "; ".join(f"{o.name}{f' [{o.group}]' if o.group else ''} (owns {', '.join(o.owns)}: {o.goal[:80]})" for o in others)
+        groups = self.reg.groups()
+        listed = "; ".join(k + " = " + ", ".join(v) for k, v in groups.items())
+        g = f"Groups: {listed}. `mention <group>` reaches every member, `mention all` everyone. " if groups else ""
+        return (f"Teammates: {lines}. {g}To ask one for something you need, run `{self.cli} mention <worker> \"<message>\"` "
                 f"(it is woken within ~15s; do NOT wait for the reply, keep working or post `blocked`). Be specific; max {self.MAX_PEER_MESSAGES} messages per teammate. ")
 
     def allowed_tools(self, w: Worker) -> list[str]:
@@ -338,23 +341,35 @@ class Runner:
 
     MAX_PEER_MESSAGES = 5  # per sender->target pair per swarm: stops worker ping-pong
 
+    def sent_to(self, sender: str, target: str) -> int:
+        """Messages `sender` already sent to `target`, directly or through a group / @all."""
+        return sum(1 for e in self.board.list_events(agent=sender, kind="mention", limit=500).items
+                   if f"to:{target}" in e.refs or e.body.startswith(f"@{target} "))
+
     def enqueue_mention(self, sender: str, target: str, message: str) -> dict:
-        """Worker-to-worker @mention: post + queue only. The monitor's dispatcher wakes the target (never inline,
-        so the sender's turn is not blocked)."""
+        """Worker-to-worker @mention (a worker, a group or `all`): post once + queue for each recipient. The monitor's
+        dispatcher wakes them (never inline, so the sender's turn is not blocked)."""
         if sender == target:
             return {"ok": False, "error": "a worker cannot mention itself"}
         try:
-            snd, tgt = self.reg.get(sender), self.reg.get(target)
+            snd, tgts = self.reg.get(sender), self.reg.resolve(target)
         except WorkerError as e:
             return {"ok": False, "error": str(e)}
-        if snd.role != "worker" or tgt.role != "worker":
+        if snd.role != "worker" or any(t.role != "worker" for t in tgts):
             return {"ok": False, "error": "only workers can mention workers"}
-        prior = [e for e in self.board.list_events(agent=sender, kind="mention", limit=500).items if e.body.startswith(f"@{target} ")]
-        if len(prior) >= self.MAX_PEER_MESSAGES:
-            return {"ok": False, "error": f"{sender} already sent {len(prior)} messages to {target}; post `blocked` for the coordinator instead"}
-        self.board.post(EventIn(agent=sender, kind="mention", body=f"@{target} {message}"[:8000]))
-        self.reg.enqueue(tgt, sender, message)
-        return {"ok": True, "queued": target}
+        tgts = [t for t in tgts if t.name != sender]
+        capped = [t.name for t in tgts if self.sent_to(sender, t.name) >= self.MAX_PEER_MESSAGES]
+        tgts = [t for t in tgts if t.name not in capped]
+        if not tgts:
+            why = f"{sender} already sent {self.MAX_PEER_MESSAGES} messages to {', '.join(capped)}" if capped else "nobody else is in that group"
+            return {"ok": False, "error": f"{why}; post `blocked` for the coordinator instead"}
+        self.board.post(EventIn(agent=sender, kind="mention", body=f"@{target} {message}"[:8000], refs=[f"to:{t.name}" for t in tgts]))
+        for t in tgts:
+            self.reg.enqueue(t, sender, message)
+        out = {"ok": True, "queued": ", ".join(t.name for t in tgts)}
+        if capped:
+            out["skipped"] = capped
+        return out
 
     def pending(self) -> list[str]:
         """Workers that have queued messages but no live runner (e.g. after a peer mention)."""
@@ -365,11 +380,13 @@ class Runner:
                 out.append(w.name)
         return out
 
-    def invoke(self, name: str, message: str, sender: str = "coordinator") -> TurnResult:
+    def invoke(self, name: str, message: str, sender: str = "coordinator", announce: bool = True) -> TurnResult:
         """@mention a worker: post + queue the message, then run turns until the queue is empty.
-        If another process is already running this worker, the message stays queued for it."""
+        If another process is already running this worker, the message stays queued for it.
+        `announce=False` when the caller already posted one event for a whole group."""
         w = self.reg.get(name)
-        self.board.post(EventIn(agent=sender, kind="mention", body=f"@{name} {message}"[:8000]))
+        if announce:
+            self.board.post(EventIn(agent=sender, kind="mention", body=f"@{name} {message}"[:8000], refs=[f"to:{name}"]))
         self.reg.enqueue(w, sender, message)
         res = self.run_queue(name)
         return res or TurnResult(worker=name, ok=True, text="queued", session_id=w.session_id, queued_only=True)

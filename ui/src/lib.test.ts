@@ -148,3 +148,29 @@ describe("raiseExhausted", () => {
     expect(raiseExhausted(undefined)).toEqual({});
   });
 });
+
+describe("mentionGraph", () => {
+  const m = (seq: number, agent: string, body: string, refs: string[] = []) => ({ seq, kind: "mention" as const, agent, body, refs });
+  it("counts each recipient of a group message, falls back to the body, and stops at a point in time", async () => {
+    const { mentionGraph } = await import("./lib");
+    const evs = [
+      m(1, "coordinator", "@backend go", ["to:api", "to:db"]),
+      m(2, "api", "@db need the schema", ["to:db"]),
+      m(3, "coordinator", "@api again"),          // old event without refs
+      { seq: 4, kind: "update" as const, agent: "api", body: "@db not a mention", refs: [] },
+      m(5, "db", "@api here it is", ["to:api"]),
+      m(6, "api", "@api note to self", ["to:api"]),
+    ];
+    const all = mentionGraph(evs);
+    expect(all.nodes).toEqual(["coordinator", "api", "db"]);
+    expect(all.edges).toEqual([
+      { from: "coordinator", to: "api", count: 2 },
+      { from: "api", to: "db", count: 1 },
+      { from: "coordinator", to: "db", count: 1 },
+      { from: "db", to: "api", count: 1 },
+    ]);
+    const early = mentionGraph(evs, 2);
+    expect(early.edges.map((e) => `${e.from}>${e.to}:${e.count}`)).toEqual(["api>db:1", "coordinator>api:1", "coordinator>db:1"]);
+    expect(early.lastSeq).toBe(2);
+  });
+});

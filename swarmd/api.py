@@ -39,6 +39,7 @@ class WorkerIn(CamelModel):
     tools: list[str] = Field(default_factory=list, max_length=32)
     model: str = Field(default="sonnet", pattern=r"^(sonnet|haiku|opus)$")
     message: str | None = Field(default=None, max_length=8000)  # optional first @mention that wakes it
+    group: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{0,31}$")
 
 
 class LimitsIn(CamelModel):
@@ -46,6 +47,11 @@ class LimitsIn(CamelModel):
     max_wakeups: int | None = Field(default=None, gt=0, le=2000)
     max_wall_s: int | None = Field(default=None, gt=0, le=86400)
     max_tokens: int | None = Field(default=None, gt=0, le=1_000_000_000)
+
+
+class ModelIn(CamelModel):
+    model: str = Field(pattern=r"^(sonnet|haiku|opus|claude-[a-z0-9.-]{1,60})$")
+    why: str = Field(default="", max_length=500)
 
 
 class ApprovalIn(CamelModel):
@@ -141,7 +147,7 @@ def create_app(board: Board, token: str | None = None, tools=None, ui_dir: Path 
 
         @app.post("/workers", status_code=201, dependencies=guard)
         def add_worker(body: WorkerIn) -> dict:
-            out = tools.define_worker(body.name, body.goal, body.owns, body.tools, body.model)
+            out = tools.define_worker(body.name, body.goal, body.owns, body.tools, body.model, group=body.group)
             if not out.get("ok"):
                 raise HTTPException(400, out.get("error", "could not define worker"))
             if body.message:
@@ -167,6 +173,13 @@ def create_app(board: Board, token: str | None = None, tools=None, ui_dir: Path 
             out = tools.decide_approval(aid, body.decision, body.note)
             if not out.get("ok"):
                 raise HTTPException(409 if "already" in out.get("error", "") or "meanwhile" in out.get("error", "") else 400, out.get("error"))
+            return out
+
+        @app.post("/workers/{name}/model", dependencies=guard)
+        def set_model(name: str, body: ModelIn) -> dict:
+            out = tools.set_worker_model(name, body.model, body.why, by="human")
+            if not out.get("ok"):
+                raise HTTPException(409 if "running" in out.get("error", "") else 400, out.get("error"))
             return out
 
         @app.post("/workers/{name}/mentions", status_code=202, dependencies=guard)
