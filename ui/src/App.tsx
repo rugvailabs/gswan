@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { BoardFeed } from "./components/BoardFeed";
+import { DiffPanel } from "./components/DiffPanel";
 import { Header } from "./components/Header";
 import { MentionBox } from "./components/MentionBox";
 import { ReportPanel } from "./components/ReportPanel";
@@ -22,6 +23,7 @@ export function App() {
         </div>
       )}
       <WorkerCards />
+      <DiffPanel />
       <ReportPanel />
       <div className="grid flex-1 grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <BoardFeed />

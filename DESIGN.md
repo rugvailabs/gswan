@@ -123,14 +123,15 @@ Verifier asks "does it meet the task" after the work. Critics attack the work an
 
 - Built: `critics.py` (findings table, rounds, severity), role `critic` (Read/Glob/Grep + read-only git), `swarm critique <target> blocker|major|nit|ok "reason" --at file:line` (critic-only; blocker/major need file:line), gate runs persona critics in parallel before the verifier when `critics=true` at `swarm_start` or `SWARM_CRITIC_MODEL` is set (default off), blockers -> worker without spending a verifier round, after 2 rounds unresolved blockers go to the verifier brief. MCP `critique_plan`. Not built: `disputed:` replies, per-role budgets.
 
-### S10 Transparency (done except per-worker diff view and replay timeline)
+### S10 Transparency (done except replay timeline)
 - Provenance on events: agent, session, the tool calls behind a claim (`refs`), cost of the turn.
 - `decision` board kind: coordinator records why it split/merged/escalated/skipped a critic finding.
 - Plan-vs-actual per worker: owned paths vs files changed, goal vs verdict; scope drift flagged.
 - Monitor explainability: every nudge/kill records the signal and thresholds that triggered it.
 - UI: per-worker diff view with critic/verifier verdicts, researcher findings panel with source links, denied.log, cost by role, replay timeline; `swarm report` exports a markdown run report.
 
-- Built: `swarmd/report.py` + `swarm report [--out] [--json]` + `GET /report` + UI "Run report" panel: budget, cost by role, plan-vs-actual per worker (git diff base..branch vs `owns`, scope drift flagged), decisions, research, critic findings, verdicts, monitor actions (nudges now include the rule/thresholds that fired), denied-call tail. `decision` board kind (coordinator logs why). Worker reply events carry provenance refs `cost:`, `turn:`, `session:`. Not built: per-worker diff viewer in the UI, replay timeline.
+- Built: `swarmd/report.py` + `swarm report [--out] [--json]` + `GET /report` + UI "Run report" panel: budget, cost by role, plan-vs-actual per worker (git diff base..branch vs `owns`, scope drift flagged), decisions, research, critic findings, verdicts, monitor actions (nudges now include the rule/thresholds that fired), denied-call tail. `decision` board kind (coordinator logs why). Worker reply events carry provenance refs `cost:`, `turn:`, `session:`. Not built: replay timeline.
+- Diff viewer: `swarmd/diffs.py` + `GET /workers/{name}/diff` (committed changes `base..branch` per file: status, +/- counts, patch capped at 60k chars, max 200 files, out-of-scope flag, uncommitted paths listed, credential-shaped strings hidden via `redact_secrets`, plus the worker's critic findings and verifier verdicts). UI `DiffPanel` ("diff" button on each worker card): line-numbered patches, findings shown on the file they cite with the cited line marked, verdicts, scope drift.
 - Enforced decisions: `swarmd/decisions.py` derives what the coordinator owes from swarm state (`[split]` once workers exist, `[escalation <worker>]` per escalated task, `[critic plan|<worker>]` while last-round critic blockers are open on the plan or on an accepted worker). Settled only by a tagged `decision` event from the coordinator/human with a reason (>= 20 chars) newer than the thing it explains. MCP `record_decision`; `merge_workers` and the Stop hook refuse while any is missing; `swarm_status.missingDecisions` and the report list them. Humans (`swarm integrate`) are not gated.
 
 ### S11 Eval harness (done: harness + 2 tasks, validated offline; no real run yet)

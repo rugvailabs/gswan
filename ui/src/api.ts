@@ -1,4 +1,4 @@
-import type { BoardEvent, EventPage, StatusResponse, SwarmInfo, WorkerDraft, LimitsDraft } from "./types";
+import type { BoardEvent, EventPage, StatusResponse, SwarmInfo, WorkerDiff, WorkerDraft, LimitsDraft } from "./types";
 
 const BASE: string = import.meta.env.DEV ? "/api" : "";
 
@@ -37,6 +37,7 @@ export const api = {
     call<{ ok: boolean }>(t, `/workers/${encodeURIComponent(worker)}/mentions`, { method: "POST", body: JSON.stringify({ message, sender: "human" }) }),
   addWorker: (t: string | null, w: WorkerDraft) => call<{ ok: boolean }>(t, "/workers", { method: "POST", body: JSON.stringify(w) }),
   setLimits: (t: string | null, l: LimitsDraft) => call<{ ok: boolean }>(t, "/limits", { method: "POST", body: JSON.stringify(l) }),
+  diff: (t: string | null, worker: string) => call<WorkerDiff>(t, `/workers/${encodeURIComponent(worker)}/diff`),
   report: (t: string | null) => call<{ markdown: string }>(t, "/report?format=markdown"),
   note: (t: string | null, body: string) =>
     call<BoardEvent>(t, "/events", { method: "POST", body: JSON.stringify({ agent: "human", kind: "human", body }) }),

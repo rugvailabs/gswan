@@ -12,7 +12,13 @@ _PATTERNS = [
 _KV = re.compile(r"(?i)\b([A-Za-z0-9_]*(?:secret|token|password|passwd|api[_-]?key)[A-Za-z0-9_]*)\s*[=:]\s*(\S+)")
 
 
-def redact(text: str) -> str:
+def redact_secrets(text: str) -> str:
+    """Only strings shaped like real credentials. For code (diffs), where `token = load()` must stay readable."""
     for pat in _PATTERNS:
         text = pat.sub("[REDACTED]", text)
+    return text
+
+
+def redact(text: str) -> str:
+    text = redact_secrets(text)
     return _KV.sub(lambda m: f"{m.group(1)}=[REDACTED]", text)

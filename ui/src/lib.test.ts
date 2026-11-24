@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { budgetParts, eventTone, filterEvents, mergeEvents, summarize, timeAgo } from "./lib";
+import { budgetParts, eventTone, filterEvents, findingMatchesFile, findingTarget, mergeEvents, parsePatch, summarize, timeAgo } from "./lib";
 import type { BoardEvent, EventKind } from "./types";
 
 const ev = (seq: number, kind: EventKind = "update", agent = "api", body = "x"): BoardEvent =>
@@ -62,5 +62,29 @@ describe("budgetParts", () => {
     const parts = budgetParts({ limits, usage: { wakeups: 32, cost_usd: 12.5, workers: 2 } });
     expect(parts.map((p) => p.text)).toEqual(["32/40", "$12.50/$10", "2/6"]);
     expect(parts.map((p) => p.tone)).toEqual(["warn", "bad", "muted"]);
+  });
+});
+
+describe("parsePatch", () => {
+  it("numbers old and new lines across hunks", () => {
+    const lines = parsePatch("@@ -3,3 +3,4 @@ def f():\n a\n-b\n+B\n+C\n d\n\\ No newline at end of file\n@@ -20 +21 @@\n-x\n+y\n");
+    expect(lines.map((l) => [l.kind, l.oldNo, l.newNo])).toEqual([
+      ["hunk", null, null], ["ctx", 3, 3], ["del", 4, null], ["add", null, 4], ["add", null, 5], ["ctx", 5, 6], ["meta", null, null],
+      ["hunk", null, null], ["del", 20, null], ["add", null, 21],
+    ]);
+  });
+  it("is empty for an empty patch", () => expect(parsePatch("")).toEqual([]));
+});
+
+describe("critic locations", () => {
+  it("splits path and line", () => {
+    expect(findingTarget("src/api/a.py:42")).toEqual({ path: "src/api/a.py", line: 42 });
+    expect(findingTarget("./a.py")).toEqual({ path: "a.py", line: null });
+  });
+  it("matches a file by full or trailing path, never by partial name", () => {
+    expect(findingMatchesFile("src/api/a.py:3", "src/api/a.py")).toBe(true);
+    expect(findingMatchesFile("a.py:3", "src/api/a.py")).toBe(true);
+    expect(findingMatchesFile("a.py:3", "src/api/data.py")).toBe(false);
+    expect(findingMatchesFile("", "src/api/a.py")).toBe(false);
   });
 });

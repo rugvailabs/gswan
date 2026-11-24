@@ -46,6 +46,24 @@ test("a human @mention wakes the worker and its reply shows up", async ({ page }
   await expect(card).toContainText("1 · $0.012", { timeout: 15_000 });
 });
 
+test("a worker's committed changes show in the diff panel", async ({ page }) => {
+  await page.goto("/?token=e2e-token");
+  const card = page.getByRole("article", { name: "worker ui" });
+  await card.getByRole("button", { name: "diff" }).click();
+  const panel = page.getByRole("region", { name: "diff ui" });
+  await expect(panel.getByText(/no branch yet/)).toBeVisible();
+  await card.getByRole("button", { name: "@ mention" }).click();
+  await page.getByLabel("Message").fill("draw the header");
+  await page.getByRole("button", { name: /Send to @ui/ }).click();
+  await expect(page.getByRole("region", { name: "board" }).getByText("got: draw the header")).toBeVisible({ timeout: 15_000 });
+  await expect(card).toContainText("1 · $0.012", { timeout: 15_000 });
+  await panel.getByRole("button", { name: "Refresh" }).click();
+  await expect(panel.getByLabel("diff summary")).toContainText("1 file changed");
+  await expect(panel.getByLabel("patch src/ui/notes.txt")).toContainText("+got:");
+  await panel.getByRole("button", { name: "Close" }).click();
+  await expect(panel).toHaveCount(0);
+});
+
 test("a wrong token shows an error instead of data", async ({ page }) => {
   await page.goto("/?token=nope");
   await expect(page.getByRole("alert")).toContainText(/token/i);

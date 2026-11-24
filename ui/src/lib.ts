@@ -97,3 +97,37 @@ export function agentsIn(events: BoardEvent[], workers: string[]): { name: strin
   names.delete("swarmd");
   return [...names].sort().map((name) => ({ name, count: threadFor(events, name).length }));
 }
+
+export interface PatchLine { kind: "hunk" | "add" | "del" | "ctx" | "meta"; text: string; oldNo: number | null; newNo: number | null }
+
+/** Turn a unified-diff body (starting at the first `@@`) into lines with old/new line numbers. */
+export function parsePatch(patch: string): PatchLine[] {
+  const out: PatchLine[] = [];
+  let o = 0;
+  let n = 0;
+  const lines = patch.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  for (const text of lines) {
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
+    if (h) {
+      o = Number(h[1]);
+      n = Number(h[2]);
+      out.push({ kind: "hunk", text, oldNo: null, newNo: null });
+    } else if (text.startsWith("+")) out.push({ kind: "add", text, oldNo: null, newNo: n++ });
+    else if (text.startsWith("-")) out.push({ kind: "del", text, oldNo: o++, newNo: null });
+    else if (text.startsWith("\\")) out.push({ kind: "meta", text, oldNo: null, newNo: null }); // "\ No newline at end of file"
+    else out.push({ kind: "ctx", text, oldNo: o++, newNo: n++ });
+  }
+  return out;
+}
+
+/** A critic location is `path:line`; critics sometimes give the path relative to a sub-folder. */
+export function findingTarget(location: string): { path: string; line: number | null } {
+  const m = /^(.*?):(\d+)$/.exec(location.trim());
+  return m ? { path: m[1]!.replace(/^\.\//, ""), line: Number(m[2]) } : { path: location.trim().replace(/^\.\//, ""), line: null };
+}
+
+export function findingMatchesFile(location: string, filePath: string): boolean {
+  const { path } = findingTarget(location);
+  return path !== "" && (filePath === path || filePath.endsWith("/" + path));
+}

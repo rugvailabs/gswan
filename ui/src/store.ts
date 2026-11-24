@@ -15,6 +15,8 @@ interface State {
   mentionTarget: string | null;
   view: "board" | "threads";
   threadAgent: string | null;
+  diffWorker: string | null;
+  openDiff: (w: string | null) => void;
   setView: (v: "board" | "threads") => void;
   openThread: (a: string) => void;
   addWorker: (w: WorkerDraft) => Promise<void>;
@@ -45,6 +47,8 @@ export const useStore = create<State>((set, get) => ({
   mentionTarget: null,
   view: "board",
   threadAgent: null,
+  diffWorker: null,
+  openDiff: (diffWorker) => set({ diffWorker }),
   setView: (view) => set({ view }),
   openThread: (threadAgent) => set({ view: "threads", threadAgent }),
   addWorker: async (w) => {

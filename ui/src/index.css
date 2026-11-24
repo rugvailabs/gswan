@@ -39,3 +39,10 @@ body {
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .tone-ok { color: var(--ok); } .tone-bad { color: var(--bad); } .tone-warn { color: var(--warn); }
 .tone-info { color: var(--info); } .tone-human { color: var(--human); } .tone-muted { color: var(--muted); }
+.diff-line { display: flex; min-width: max-content; }
+.diff-no { flex: none; width: 3.25rem; padding-right: 0.5rem; text-align: right; color: var(--muted); user-select: none; }
+.diff-text { flex: 1; white-space: pre; padding-right: 0.75rem; }
+.diff-add { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.diff-del { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.diff-hunk { background: color-mix(in srgb, var(--info) 10%, transparent); color: var(--info); }
+.diff-cited { box-shadow: inset 3px 0 0 var(--warn); }

@@ -7,6 +7,8 @@ Modelled on the behaviour described for Google Antigravity's `/swarm` (coordinat
 ## Run report
 `swarm report` (also the **Run report** panel in the UI, or `GET /report`) shows, after or during a run: budget and cost by role, each worker's planned paths vs the files its branch actually changed (scope drift is flagged), the coordinator's recorded decisions (and any required one it never explained), research findings with sources, critic findings, verifier verdicts, monitor actions with the rule that fired, and recent denied tool calls.
 
+Each worker card in the dashboard also has a **diff** button: the files its branch changed since its base commit, with line-numbered patches, files outside its owned paths flagged, and the critic findings and verifier verdicts shown next to the code they refer to. Only committed changes are shown; uncommitted paths are listed by name.
+
 ## Evals
 `swarm eval` compares one agent against the swarm modes (`single`, `swarm`, `swarm+research`, `swarm+critics`, `swarm+all`) on fixed tasks in `evals/tasks/`, scored by hidden tests the agents never see. It spends real money, so it is a dry run (it prints the run count and worst-case spend) until you add `--yes`. Example: `swarm eval --task textkit --mode single --mode swarm --repeat 3 --max-cost 2 --yes`; results land in `evals/results/`.
 

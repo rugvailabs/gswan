@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { useStore } from "./store";
-import type { BoardEvent, StatusResponse } from "./types";
+import type { BoardEvent, StatusResponse, WorkerDiff } from "./types";
 
 class FakeES {
   static last: FakeES | null = null;
@@ -30,6 +30,21 @@ const status: StatusResponse = {
   ],
 };
 
+const diff: WorkerDiff = {
+  worker: "api", role: "worker", goal: "build the api", owns: ["src/api"], branch: "swarm/swm_1/api", base: "abcdef1234567890",
+  task: { id: "tsk_1", status: "failed", failedRounds: 1, reasons: ["tests fail"] }, moreFiles: 0, note: null, uncommitted: ["scratch.txt"],
+  totals: { files: 2, additions: 3, deletions: 1 },
+  files: [
+    { path: "src/api/a.py", status: "M", additions: 2, deletions: 1, binary: false, outOfScope: false, redacted: false, truncated: false, patch: "@@ -1,2 +1,3 @@\n import db\n-old()\n+q = build(user)\n+db.run(q)\n" },
+    { path: "docs/oops.md", status: "A", additions: 1, deletions: 0, binary: false, outOfScope: true, redacted: false, truncated: false, patch: "@@ -0,0 +1 @@\n+hello\n" },
+  ],
+  critiques: [
+    { critic: "critic-api-security", round: 1, severity: "blocker", location: "src/api/a.py:2", reason: "SQL injection" },
+    { critic: "critic-api-tests", round: 1, severity: "nit", location: "", reason: "no test for the error path" },
+  ],
+  verdicts: [{ seq: 7, passed: false, by: "verify-api", text: "1. tests fail" }],
+};
+
 let calls: { url: string; init?: RequestInit }[];
 beforeEach(() => {
   calls = [];
@@ -44,11 +59,13 @@ beforeEach(() => {
     if (url.startsWith("/events?")) return json({ items: [ev(1, "coordinator", "plan", "split work"), ev(2, "api", "claim", "taking api")], total: 2, limit: 500, offset: 0 });
     if (url === "/workers" && init?.method === "POST") return json({ ok: true, worker: "docs" }, 201);
     if (url === "/limits" && init?.method === "POST") return json({ ok: true }, 200);
+    if (url === "/workers/api/diff") return json(diff);
+    if (url === "/workers/ui/diff") return json({ message: "no worker named 'ui' in the active swarm" }, 404);
     if (url.startsWith("/workers/api/mentions")) return json({ ok: true, started: "api" }, 202);
     if (url === "/events") return json(ev(9, "human", "human", JSON.parse(String(init?.body)).body), 201);
     return json({ message: "nope" }, 404);
   }));
-  useStore.setState({ token: "tok", swarm: null, status: null, events: [], live: false, error: null, kinds: new Set(), agent: null, mentionTarget: null });
+  useStore.setState({ token: "tok", swarm: null, status: null, events: [], live: false, error: null, kinds: new Set(), agent: null, mentionTarget: null, diffWorker: null });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -136,6 +153,37 @@ describe("App", () => {
     expect(within(thread).getByText("@api build the endpoint")).toBeInTheDocument();
     expect(within(thread).getByText("api replied: endpoint done")).toBeInTheDocument();
     expect(within(thread).getByText("reply")).toBeInTheDocument();
+  });
+
+  it("shows a worker's diff with scope drift, verdicts and critic findings on the right file", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const card = await screen.findByRole("article", { name: "worker api" });
+    await user.click(within(card).getByRole("button", { name: "diff" }));
+    const panel = await screen.findByRole("region", { name: "diff api" });
+    const summary = await within(panel).findByLabelText("diff summary");
+    expect(summary).toHaveTextContent("2 files changed");
+    expect(summary).toHaveTextContent("+3");
+    expect(summary).toHaveTextContent("1 outside owned paths (src/api)");
+    expect(within(panel).getByText(/scratch.txt/)).toBeInTheDocument();
+    expect(within(within(panel).getByRole("list", { name: "verdicts" })).getByText("fail")).toBeInTheDocument();
+    expect(within(within(panel).getByRole("list", { name: "findings for src/api/a.py" })).getByText(/SQL injection/)).toBeInTheDocument();
+    expect(within(within(panel).getByRole("list", { name: "general findings" })).getByText(/no test for the error path/)).toBeInTheDocument();
+    const patch = within(panel).getByLabelText("patch src/api/a.py");
+    const added = within(patch).getByText("+q = build(user)").closest(".diff-line")!;
+    expect(added).toHaveClass("diff-add", "diff-cited"); // the line the critic pointed at (new line 2)
+    expect(within(patch).getByText("-old()").closest(".diff-line")).toHaveClass("diff-del");
+    expect(within(panel).getByText("outside owned paths")).toBeInTheDocument();
+    await user.click(within(panel).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("region", { name: "diff api" })).not.toBeInTheDocument();
+  });
+
+  it("shows an error when a diff cannot be loaded", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const card = await screen.findByRole("article", { name: "worker ui" });
+    await user.click(within(card).getByRole("button", { name: "diff" }));
+    expect(await within(await screen.findByRole("region", { name: "diff ui" })).findByRole("alert")).toHaveTextContent(/no worker named/);
   });
 
   it("adds a worker and raises limits from the side panel", async () => {

@@ -75,3 +75,33 @@ export interface SwarmInfo {
 
 export interface WorkerDraft { name: string; goal: string; owns: string[]; tools: string[]; model: "sonnet" | "haiku" | "opus"; message?: string }
 export interface LimitsDraft { maxWorkers?: number; maxWakeups?: number; maxWallS?: number; maxCostUsd?: number }
+
+export interface DiffFile {
+  path: string;
+  status: string; // A | M | D
+  additions: number | null; // null for binary files
+  deletions: number | null;
+  binary: boolean;
+  outOfScope: boolean;
+  redacted: boolean;
+  truncated: boolean;
+  patch: string;
+}
+export interface DiffFinding { critic: string; round: number; severity: "blocker" | "major" | "nit"; location: string; reason: string }
+export interface DiffVerdict { seq: number; passed: boolean; by: string; text: string }
+export interface WorkerDiff {
+  worker: string;
+  role: string;
+  goal: string;
+  owns: string[];
+  branch: string | null;
+  base: string | null;
+  task: TaskView | null;
+  files: DiffFile[] | null; // null when there is no branch to diff yet
+  moreFiles: number;
+  note: string | null;
+  uncommitted: string[];
+  totals: { files: number; additions: number; deletions: number };
+  critiques: DiffFinding[];
+  verdicts: DiffVerdict[];
+}

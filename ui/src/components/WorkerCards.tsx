@@ -19,6 +19,8 @@ function Card({ w, finding }: { w: WorkerView; finding?: MonitorFinding }) {
   const setAgent = useStore((s) => s.setAgent);
   const agent = useStore((s) => s.agent);
   const openThread = useStore((s) => s.openThread);
+  const openDiff = useStore((s) => s.openDiff);
+  const diffWorker = useStore((s) => s.diffWorker);
   const task = w.task;
   return (
     <article aria-label={`worker ${w.name}`} className="flex flex-col gap-2 rounded-lg border p-3" style={{ backgroundColor: "var(--panel)", borderColor: "var(--line)" }}>
@@ -51,12 +53,13 @@ function Card({ w, finding }: { w: WorkerView; finding?: MonitorFinding }) {
         {w.queue > 0 && (<><dt>queued</dt><dd>{w.queue}</dd></>)}
         {w.branch && (<><dt>branch</dt><dd className="mono truncate" title={w.branch}>{w.branch}</dd></>)}
       </dl>
-      <div className="mt-1 flex gap-2">
+      <div className="mt-1 flex flex-wrap gap-2">
         <button className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--line)" }} onClick={() => setTarget(w.name)}>@ mention</button>
         <button className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--line)" }} aria-pressed={agent === w.name} onClick={() => setAgent(agent === w.name ? null : w.name)}>
           {agent === w.name ? "show all" : "filter board"}
         </button>
         <button className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--line)" }} onClick={() => openThread(w.name)}>conversation</button>
+        <button className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--line)" }} aria-pressed={diffWorker === w.name} onClick={() => openDiff(diffWorker === w.name ? null : w.name)}>diff</button>
       </div>
     </article>
   );

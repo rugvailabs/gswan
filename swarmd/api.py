@@ -112,6 +112,16 @@ def create_app(board: Board, token: str | None = None, tools=None, ui_dir: Path 
         d = report.build(board, board.db_path.parent.parent)
         return {"markdown": report.markdown(d)} if format == "markdown" else d
 
+    @app.get("/workers/{name}/diff", dependencies=guard)
+    def worker_diff(name: str) -> dict:
+        """What the worker's branch changed since its base commit, with the critic findings and verdicts about it."""
+        from . import diffs
+        from .workers import WorkerError
+        try:
+            return diffs.worker_diff(board, board.db_path.parent.parent, name)
+        except WorkerError as e:
+            raise HTTPException(404, str(e))
+
     @app.get("/stale-workers", response_model=list[StaleWorker], dependencies=guard)
     def stale(minutes: float = Query(10, gt=0)) -> list[StaleWorker]:
         return board.stale(minutes)
