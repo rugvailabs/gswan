@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from . import decisions
 from .board import Board
 from .critics import Critiques
 from .limits import LimitsStore
@@ -52,6 +53,7 @@ def build(board: Board, root: Path) -> dict:
     return {"swarmId": sw.id, "task": sw.task, "startedAt": sw.created_at, **LimitsStore(board).snapshot(),
             "costByRole": by_role, "agentsByRole": n_roles, "workers": workers,
             "plan": [e.body for e in by_kind("plan")], "decisions": [f"#{e.seq} {e.body}" for e in by_kind("decision")],
+            "missingDecisions": [f"{o.tag} {o.ask}" for o in decisions.missing(board)],
             "research": [f"#{e.seq} {e.agent}: {e.body}" for e in by_kind("research")],
             "critiques": [f"#{e.seq} {e.body}" for e in by_kind("critique")],
             "verdicts": [f"#{e.seq} {e.body}" for e in by_kind("verify")],
@@ -75,7 +77,7 @@ def markdown(d: dict) -> str:
                  f"{c['blocker']}/{c['major']}/{c['nit']} | ${w['costUsd']} |")
     if any(w["outOfScope"] for w in d["workers"]):
         L += ["", "**Scope drift:** at least one worker changed files outside its owned paths (see table)."]
-    for title, key in (("Decisions", "decisions"), ("Research findings", "research"), ("Critic findings", "critiques"),
+    for title, key in (("Decisions", "decisions"), ("Decisions the coordinator has NOT explained", "missingDecisions"), ("Research findings", "research"), ("Critic findings", "critiques"),
                        ("Verifier verdicts", "verdicts"), ("Monitor actions (signal and rule that triggered each)", "monitor"), ("Blocked", "blocked")):
         L += ["", f"## {title}"] + ([f"- {x}" for x in d[key]] or ["- none"])
     L += ["", "## Denied tool calls (last 20)"] + ([f"- {x}" for x in d["deniedTail"]] or ["- none"])

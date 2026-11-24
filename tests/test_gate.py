@@ -143,6 +143,8 @@ def test_stop_hook_blocks_until_settled_with_cap(repo):
 
 def test_stop_hook_allows_when_done_or_no_swarm(repo, tmp_path):
     from swarmd.stophook import decide
+    from swarmd import decisions
     board, r, ex, gate, tasks = setup(repo, [("pass", ["ok"])]); gate.invoke("api", "go")
+    decisions.record(board, "split", "one worker: the task only touches src/api")
     assert decide(repo, {}) is None
     assert decide(tmp_path, {}) is None  # no db at all

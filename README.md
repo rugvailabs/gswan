@@ -5,7 +5,7 @@ A coordinator splits a big task across **named, persistent workers**. Each worke
 Modelled on the behaviour described for Google Antigravity's `/swarm` (coordinator, named workers, verifier, monitor, shared board). Antigravity 1.22.2 contains no `/swarm` code, so the verifier, monitor and board here are our own design from that description. See `DESIGN.md`.
 
 ## Run report
-`swarm report` (also the **Run report** panel in the UI, or `GET /report`) shows, after or during a run: budget and cost by role, each worker's planned paths vs the files its branch actually changed (scope drift is flagged), the coordinator's recorded decisions, research findings with sources, critic findings, verifier verdicts, monitor actions with the rule that fired, and recent denied tool calls.
+`swarm report` (also the **Run report** panel in the UI, or `GET /report`) shows, after or during a run: budget and cost by role, each worker's planned paths vs the files its branch actually changed (scope drift is flagged), the coordinator's recorded decisions (and any required one it never explained), research findings with sources, critic findings, verifier verdicts, monitor actions with the rule that fired, and recent denied tool calls.
 
 ## Evals
 `swarm eval` compares one agent against the swarm modes (`single`, `swarm`, `swarm+research`, `swarm+critics`, `swarm+all`) on fixed tasks in `evals/tasks/`, scored by hidden tests the agents never see. It spends real money, so it is a dry run (it prints the run count and worst-case spend) until you add `--yes`. Example: `swarm eval --task textkit --mode single --mode swarm --repeat 3 --max-cost 2 --yes`; results land in `evals/results/`.
@@ -57,7 +57,7 @@ Cards per worker (status, task, monitor warnings, activity, cost), the live boar
 | Board | SQLite event log (`.swarm/swarm.db`), mirrored to `.swarm/board.md`; secrets are redacted before storage. |
 | Stop hook | Blocks the coordinator (max 3 times) while any task is not `done`/`escalated`. |
 
-MCP tools (coordinator): `swarm_start` (`critics=true` adds diff critics), `define_worker`, `define_researcher` (read-only web/repo research with cited `research` events), `critique_plan` (read-only plan critic),  `invoke_worker` (non-blocking), `wait_for_workers` (≤110 s, call again if `timedOut`), `merge_workers`, `swarm_status`, `board_post`, `board_digest`.
+MCP tools (coordinator): `swarm_start` (`critics=true` adds diff critics), `define_worker`, `define_researcher` (read-only web/repo research with cited `research` events), `critique_plan` (read-only plan critic),  `invoke_worker` (non-blocking), `wait_for_workers` (≤110 s, call again if `timedOut`), `merge_workers`, `record_decision`, `swarm_status`, `board_post`, `board_digest`.
 
 CLI: `swarm init|post|show|tail|digest|stale|export|tasks|limits|mention|integrate|monitor|serve`, `swarm worker define|list|invoke`, `swarm verdict` (verifier role only; `--force` for humans).
 

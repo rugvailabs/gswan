@@ -31,6 +31,7 @@ class Finding:
     severity: str
     location: str
     reason: str
+    ts: str = ""
 
 
 class Critiques:
@@ -58,14 +59,14 @@ class Critiques:
             raise CritiqueError("a finding needs a concrete reason (what fails, with what input)")
         if severity != "nit" and target != "plan" and not LOCATION.fullmatch(location.strip()):
             raise CritiqueError("blocker/major findings must name a location as file:line (--at path/to/file.py:42)")
-        rnd, sw = max(1, self.rounds(target)), self.b._require()
+        rnd, sw, ts = max(1, self.rounds(target)), self.b._require(), utc_now()
         with self.b._conn() as c:
             cur = c.execute("INSERT INTO critiques (swarm_id,target,critic,round,severity,location,reason,ts) VALUES (?,?,?,?,?,?,?,?)",
-                            (sw.id, target, critic, rnd, severity, location.strip(), reason, utc_now()))
+                            (sw.id, target, critic, rnd, severity, location.strip(), reason, ts))
             fid = cur.lastrowid
         where = f" @ {location.strip()}" if location.strip() else ""
         self.b.post(EventIn(agent=critic, kind="critique", body=f"{severity} {target}{where}: {reason}"[:7900]))
-        return Finding(fid, target, critic, rnd, severity, location.strip(), reason)
+        return Finding(fid, target, critic, rnd, severity, location.strip(), reason, ts)
 
     def list(self, target: str, rnd: int | None = None, severity: str | None = None) -> list[Finding]:
         sw = self.b._require()
@@ -76,7 +77,7 @@ class Critiques:
             q += " AND severity=?"; args.append(severity)
         with self.b._conn() as c:
             rows = c.execute(q + " ORDER BY id", args).fetchall()
-        return [Finding(r["id"], r["target"], r["critic"], r["round"], r["severity"], r["location"], r["reason"]) for r in rows]
+        return [Finding(r["id"], r["target"], r["critic"], r["round"], r["severity"], r["location"], r["reason"], r["ts"]) for r in rows]
 
     def blockers(self, target: str, rnd: int | None = None) -> list[Finding]:
         return self.list(target, rnd, "blocker")

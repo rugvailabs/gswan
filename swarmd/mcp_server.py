@@ -1,6 +1,6 @@
 """MCP server (stdio) exposing the swarm to Claude Code agents.
 
-Coordinator (default): swarm_start, define_worker, invoke_worker, wait_for_workers, swarm_status, board_post, board_digest.
+Coordinator (default): swarm_start, define_worker, invoke_worker, wait_for_workers, record_decision, swarm_status, board_post, board_digest.
 Workers (SWARM_ROLE=worker): board_post, board_digest only.
 `invoke_worker` is non-blocking (a turn can take minutes); use `wait_for_workers` to block with a bounded timeout.
 """
@@ -13,6 +13,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from . import decisions
 from .board import Board, NoActiveSwarm
 from .cli import ensure_swarm_dir, find_root, open_board
 from .gate import Gate
@@ -156,6 +157,10 @@ class SwarmTools:
         """Merge every worker whose task is `done` into the integration branch (never your checked-out branch).
         On a conflict an `integrator` worker resolves it (wait_for_workers, then call this again to continue)."""
         try:
+            owed = decisions.missing(self.board)
+            if owed:  # explain first: the run report is only as honest as the reasons recorded in it
+                return {"ok": False, "missingDecisions": [o.view() for o in owed],
+                        "error": "record_decision is required before merging: " + decisions.owed_text(owed)}
             self.integrator.last_thread = None
             out = self.integrator.merge_ready(auto_resolve=auto_resolve, order=order)
             if verify and out.get("allMerged") and not out.get("integratorStarted"):
@@ -166,6 +171,14 @@ class SwarmTools:
             return out
         except (IntegrationError, WorkerError, NoActiveSwarm) as e:
             return self._err(e)
+
+    def record_decision(self, topic: str, why: str, worker: str = "") -> dict:
+        """Record WHY you made a choice (kind=decision). Required: `split`, `escalation <worker>`, `critic <worker|plan>`."""
+        try:
+            e = decisions.record(self.board, topic, why, worker)
+            return {"ok": True, "seq": e.seq, "stillMissing": [o.view() for o in decisions.missing(self.board)]}
+        except (decisions.DecisionError, ValueError, NoActiveSwarm) as ex:
+            return self._err(ex)
 
     def set_limits(self, **kw) -> dict:
         """Human-only (HTTP API / CLI), deliberately not an MCP tool: the coordinator cannot raise its own budget."""
@@ -179,7 +192,7 @@ class SwarmTools:
         try:
             ws = [self._worker_view(w) for w in self.runner.reg.list() + self.runner.reg.list_researchers() + self.runner.reg.list_critics() if w.name == "plan-critic" or w.role != "critic"]
             unsettled = [t.worker for t in self.tasks.unsettled()]
-            return {"ok": True, **{k: v for k, v in self.runner.limits.snapshot().items()}, "allTasksSettled": not unsettled, "unsettled": unsettled, "workers": ws, "stale": [s.model_dump(by_alias=True) for s in self.board.stale(10)],
+            return {"ok": True, **{k: v for k, v in self.runner.limits.snapshot().items()}, "allTasksSettled": not unsettled, "unsettled": unsettled, "missingDecisions": [o.view() for o in decisions.missing(self.board)], "workers": ws, "stale": [s.model_dump(by_alias=True) for s in self.board.stale(10)],
                     "monitor": [{"worker": f.worker, "state": f.state, "detail": f.detail} for f in self.monitor.check()],
                     "digest": self.board.digest().text}
         except NoActiveSwarm as e:
@@ -203,6 +216,7 @@ class SwarmTools:
 INSTRUCTIONS = (
     "Swarm: coordinate named worker agents. Flow: swarm_start -> define_worker (disjoint owned paths) -> "
     "invoke_worker (non-blocking) -> wait_for_workers (bounded wait; call again if timedOut) -> review newEvents. "
+    "Explain your choices with record_decision (split, escalations, open critic blockers): merge_workers refuses until you do. "
     f"Board kinds: {', '.join(EVENT_KINDS)}."
 )
 
@@ -232,7 +246,12 @@ def build_server(tools: SwarmTools, role: str = "coordinator") -> MCPServer:
             "Merge all verified (done) worker branches into swarm/<id>/integration in its own worktree. Conflicts go to an "
             "integrator worker; wait_for_workers then call again. Once allMerged, call with verify=true: a read-only verifier runs "
             "the granted test commands on the merged branch (wait_for_workers, then check swarm_status task `integrator`)."))
-        srv.add_tool(tools.swarm_status, name="swarm_status", description="Workers, stale workers and the board digest.")
+        srv.add_tool(tools.record_decision, name="record_decision", description=(
+            "Record why you made a choice; it goes on the board and into the run report. topic: split (why this split and these owned "
+            "paths), escalation (worker=<name>: what you did and told the user), critic (worker=<name> or `plan`: how each blocker was "
+            "fixed or why it was overridden), other. merge_workers and finishing are refused while a required one is missing "
+            "(see `missingDecisions` in swarm_status)."))
+        srv.add_tool(tools.swarm_status, name="swarm_status", description="Workers, stale workers, decisions you still owe and the board digest.")
     return srv
 
 
