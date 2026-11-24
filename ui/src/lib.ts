@@ -1,4 +1,4 @@
-import type { BoardEvent, EventKind, TaskStatus } from "./types";
+import type { BoardEvent, Budget, EventKind, LimitsDraft, TaskStatus } from "./types";
 
 /** Merge incoming events into an existing list: dedupe by seq, keep ascending order. */
 export function mergeEvents(existing: BoardEvent[], incoming: BoardEvent[]): BoardEvent[] {
@@ -39,6 +39,8 @@ export function eventTone(e: Pick<BoardEvent, "kind" | "body">): "ok" | "bad" | 
       return e.body.startsWith("blocker") ? "bad" : e.body.startsWith("ok") ? "ok" : "warn";
     case "nudge":
       return "warn";
+    case "approval":
+      return e.body.includes(" denied it ") ? "bad" : e.body.includes(" asks to run: ") ? "warn" : "ok";
     case "mention":
     case "research":
     case "decision":
@@ -76,6 +78,17 @@ export function budgetParts(b: { limits?: { max_wakeups: number; max_tokens: num
     part("tokens", b.usage.tokens, b.limits.max_tokens, fmtTokens),
     part("workers", b.usage.workers, b.limits.max_workers, (n) => String(n)),
   ];
+}
+
+/** New limits that lift every budget that is used up, by half again (at least +1): one click to resume a paused swarm. */
+export function raiseExhausted(b: Partial<Budget> | undefined): LimitsDraft {
+  if (!b?.limits || !b.usage) return {};
+  const up = (cap: number) => Math.max(cap + 1, Math.ceil(cap * 1.5));
+  const out: LimitsDraft = {};
+  if (b.usage.wakeups >= b.limits.max_wakeups) out.maxWakeups = up(b.limits.max_wakeups);
+  if (b.usage.tokens >= b.limits.max_tokens) out.maxTokens = up(b.limits.max_tokens);
+  if (b.usage.wall_s >= b.limits.max_wall_s) out.maxWallS = up(b.limits.max_wall_s);
+  return out;
 }
 
 /** "@target rest" -> target; mentions are how agents talk to each other. */

@@ -223,6 +223,9 @@ def cmd_limits(b: Board, a) -> int:
     from .limits import FIELDS, LimitsStore
     st = LimitsStore(b)
     if a.set:
+        if os.environ.get("SWARM_ROLE"):  # the board CLI is open to every agent; budgets are the human's call
+            print("error: only a human can change budgets", file=sys.stderr)
+            return 3
         try:
             kv = dict(x.split("=", 1) for x in a.set)
             st.set(**kv)
@@ -233,6 +236,34 @@ def cmd_limits(b: Board, a) -> int:
     for k in FIELDS:
         use = {"max_workers": "workers", "max_wakeups": "wakeups", "max_wall_s": "wall_s", "max_tokens": "tokens"}[k]
         print(f"{k:<14} {snap['usage'][use]} / {snap['limits'][k]}")
+    if a.set:
+        print("paused work resumes within ~15s (the monitor picks it up)")
+    return 0
+
+
+def cmd_approvals(b: Board, a) -> int:
+    from .approvals import ApprovalError, Approvals
+    ap = Approvals(b)
+    if a.cmd in ("approve", "deny"):
+        if os.environ.get("SWARM_ROLE"):
+            print("error: only a human can answer approval requests", file=sys.stderr)
+            return 3
+        decision = "deny" if a.cmd == "deny" else ("program" if a.program else "allow")
+        try:
+            x = ap.decide(a.id, decision, a.note or "")
+        except ApprovalError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        from .workers import Registry
+        Registry(b).enqueue(Registry(b).get(x.worker), "human", Approvals.message(x))
+        print(f"{x.id}: {x.status} ({x.decision}); {x.worker} is told within ~15s")
+        return 0
+    rows = ap.list(None if a.all else "pending")
+    for x in rows:
+        grant = f"  [--program grants {x.program}]" if x.program and x.status == "pending" else ""
+        print(f"{x.id}  {x.status:<8} {x.worker:<12} {x.command}{grant}\n    denied: {x.reason[:160]}")
+    if not rows:
+        print("no pending approval requests" if not a.all else "no approval requests")
     return 0
 
 
@@ -382,6 +413,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--verify", action="store_true", help="after merging everything, run a read-only verifier over the merged branch")
     s = sub.add_parser("mention", help="@mention a worker (queued; the monitor wakes it)")
     s.add_argument("target"); s.add_argument("message")
+    s = sub.add_parser("approvals", help="list approval requests for denied commands (--all for answered ones too)")
+    s.add_argument("--all", action="store_true")
+    s = sub.add_parser("approve", help="human: allow a denied command (--program grants the whole program)")
+    s.add_argument("id"); s.add_argument("--program", action="store_true"); s.add_argument("--note")
+    s = sub.add_parser("deny", help="human: refuse a denied command, with an optional note for the worker")
+    s.add_argument("id"); s.add_argument("--note")
     s = sub.add_parser("limits", help="show swarm budget usage; humans raise limits with --set k=v ...")
     s.add_argument("--set", nargs="+", metavar="K=V")
     s = sub.add_parser("monitor", help="diagnose workers and climb the escalation ladder (--watch to loop)")
@@ -418,6 +455,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_mention(b, a, root)
         if a.cmd == "limits":
             return cmd_limits(b, a)
+        if a.cmd in ("approvals", "approve", "deny"):
+            return cmd_approvals(b, a)
         if a.cmd == "tasks":
             return cmd_tasks(b, a)
         if a.cmd == "worker":

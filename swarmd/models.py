@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 EventKind = Literal[
-    "plan", "claim", "update", "blocked", "done", "verify", "nudge", "mention", "human", "research", "critique", "decision"
+    "plan", "claim", "update", "blocked", "done", "verify", "nudge", "mention", "human", "research", "critique", "decision", "approval"
 ]
 EVENT_KINDS: tuple[str, ...] = EventKind.__args__  # type: ignore[attr-defined]
 SYSTEM_AGENTS = frozenset({"coordinator", "monitor", "verifier", "human", "swarmd"})
@@ -163,4 +163,5 @@ class TurnResult(CamelModel):
     tokens: dict[str, int] = Field(default_factory=dict)  # input / output / cached / total for the turns just run
     denials: list[str] = Field(default_factory=list)
     queued_only: bool = False  # True when the worker was already running and the message was queued
+    budget_stopped: bool = False  # a swarm budget is used up: the message stays queued and runs when a human raises it
     turns_run: int = 0

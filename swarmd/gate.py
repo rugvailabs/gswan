@@ -1,13 +1,18 @@
 """Verifier gate: a worker's `done` is provisional. After each worker turn, run a read-only verifier;
-failures go back to the worker (max MAX_ROUNDS), then escalate to the human."""
+failures go back to the worker (max MAX_ROUNDS), then escalate to the human.
+
+Budgets pause, they do not fail: when a swarm budget is used up mid-verification, the task goes back to
+`awaiting_verification` and is recorded in `paused`; `resume()` (called when a human raises a limit, and by the
+monitor every tick) picks it up again once the budget allows."""
 from __future__ import annotations
 
 import subprocess
 import threading
 
 from .board import Board
+from .limits import BudgetExceeded
 from .critics import MAX_CRITIC_ROUNDS, PERSONAS, Critiques, choose_personas, fmt
-from .models import EventIn, TurnResult
+from .models import EventIn, TurnResult, utc_now
 from .runner import Runner
 from .tasks import MAX_ROUNDS, Tasks
 
@@ -45,8 +50,14 @@ class Gate:
             if not self.tasks.set_status(name, "verifying", only_from=("awaiting_verification",)):
                 return  # someone else is verifying it
             target = self.runner.reg.get(name)
+            try:
+                self.runner.limits.check_turn()
+            except BudgetExceeded as e:
+                return self.pause(name, str(e))
             if self.critic_model and self.crit.rounds(name) < MAX_CRITIC_ROUNDS and target.worktree:
                 blockers = self.run_critics(target, t)
+                if blockers is None:
+                    return self.pause(name, "a budget ran out while critics were reviewing")
                 if blockers:  # the worker fixes them first; no verifier round is spent
                     self.tasks.set_status(name, "failed")
                     self.board.post(EventIn(agent="swarmd", kind="update",
@@ -71,6 +82,9 @@ class Gate:
             self.board.post(EventIn(agent="swarmd", kind="update", body=f"verifying {name} (round {t.rounds + 1})", refs=[f"task:{name}:verifying"]))
             res = self.runner.invoke(v.name, self.brief(target, t), sender="swarmd")
             t = self.tasks.get(name)
+            if res.budget_stopped and t.status == "verifying":
+                self.runner.reg.drain(self.runner.reg.get(v.name))  # the brief is rebuilt on resume
+                return self.pause(name, res.text)
             if t.status == "verifying":  # verifier ended its turn without a verdict
                 no_verdict += 1
                 self.tasks.set_status(name, "awaiting_verification")
@@ -92,6 +106,39 @@ class Gate:
                 if not fix.ok or fix.queued_only:
                     return
                 # worker posts `done` again -> task flips to awaiting_verification -> loop verifies again
+
+    # ---- pause / resume ---------------------------------------------------------------
+    def pause(self, name: str, reason: str) -> None:
+        self.tasks.set_status(name, "awaiting_verification", only_from=("verifying",))
+        sw = self.board._require()
+        with self.board._conn() as c:
+            c.execute("INSERT OR REPLACE INTO paused (swarm_id,worker,reason,ts) VALUES (?,?,?,?)", (sw.id, name, reason[:500], utc_now()))
+        self.board.post_once(EventIn(agent="swarmd", kind="blocked", body=f"paused: {reason}"[:2000]))
+        self.board.post(EventIn(agent="swarmd", kind="update", body=f"{name} paused before verification; it resumes when a human raises the budget",
+                                refs=[f"task:{name}:awaiting_verification", f"paused:{name}"]))
+
+    def paused(self) -> list[dict]:
+        sw = self.board._require()
+        with self.board._conn() as c:
+            return [{"worker": r["worker"], "reason": r["reason"], "since": r["ts"]}
+                    for r in c.execute("SELECT * FROM paused WHERE swarm_id=? ORDER BY ts", (sw.id,))]
+
+    def resume(self) -> list[str]:
+        """Restart paused verifications once the budget allows. Each paused task is claimed by exactly one caller."""
+        try:
+            self.runner.limits.check_turn()
+        except BudgetExceeded:
+            return []
+        sw, started = self.board._require(), []
+        for p in self.paused():
+            with self.board._conn() as c:
+                won = c.execute("DELETE FROM paused WHERE swarm_id=? AND worker=?", (sw.id, p["worker"])).rowcount
+            if won:
+                threading.Thread(target=self.settle, args=(p["worker"],), name=f"resume-{p['worker']}", daemon=True).start()
+                started.append(p["worker"])
+        if started:
+            self.board.post(EventIn(agent="swarmd", kind="update", body=f"budget allows work again; resuming verification of {', '.join(started)}"))
+        return started
 
     def changes(self, w) -> list[tuple[str, int]] | None:
         """[(path, added + deleted lines)] the worker committed since its base, or None when git cannot tell."""
@@ -116,13 +163,18 @@ class Gate:
             return []
         rnd = self.crit.begin_round(target.name)
         self.board.post(EventIn(agent="swarmd", kind="update", body=f"critics reviewing {target.name} (round {rnd}): {', '.join(personas)}" + (f" ({why})" if why else "")))
-        threads = []
+        threads, results = [], {}
         for p in personas:
             c = self.runner.reg.define_critic(f"critic-{target.name}-{p}", f"{p}: look for {PERSONAS[p]}", cwd=target.worktree, model=self.critic_model)
-            th = threading.Thread(target=self.runner.invoke, args=(c.name, self.critic_brief(target, t, p)), kwargs={"sender": "swarmd"}, daemon=True)
+            th = threading.Thread(target=lambda n=c.name, b=self.critic_brief(target, t, p): results.__setitem__(n, self.runner.invoke(n, b, sender="swarmd")), daemon=True)
             th.start(); threads.append(th)
         for th in threads:
             th.join()
+        stopped = [n for n, r in results.items() if r.budget_stopped]
+        if stopped:  # the round did not finish: drop its queued briefs; on resume a new round reviews the diff again
+            for n in stopped:
+                self.runner.reg.drain(self.runner.reg.get(n))
+            return None
         return self.crit.blockers(target.name, rnd)
 
     def critic_brief(self, w, t, persona: str) -> str:

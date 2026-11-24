@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL REFERENCES swarms(id), worker TEXT NOT NULL, goal TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'open', rounds INTEGER NOT NULL DEFAULT 0, reasons TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (swarm_id, worker));
+CREATE TABLE IF NOT EXISTS approvals (
+  id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL, worker TEXT NOT NULL, command TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+  program TEXT, status TEXT NOT NULL DEFAULT 'pending', decision TEXT, note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL, decided_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_approvals ON approvals(swarm_id, worker, status);
+CREATE TABLE IF NOT EXISTS paused (
+  swarm_id TEXT NOT NULL, worker TEXT NOT NULL, reason TEXT NOT NULL, ts TEXT NOT NULL, PRIMARY KEY (swarm_id, worker));
 CREATE TABLE IF NOT EXISTS ran_commands (
   swarm_id TEXT NOT NULL, worker TEXT NOT NULL, ts TEXT NOT NULL, command TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_ran ON ran_commands(swarm_id, worker);

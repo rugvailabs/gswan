@@ -59,6 +59,7 @@ beforeEach(() => {
     if (url.startsWith("/events?")) return json({ items: [ev(1, "coordinator", "plan", "split work"), ev(2, "api", "claim", "taking api")], total: 2, limit: 500, offset: 0 });
     if (url === "/workers" && init?.method === "POST") return json({ ok: true, worker: "docs" }, 201);
     if (url === "/limits" && init?.method === "POST") return json({ ok: true }, 200);
+    if (url.startsWith("/approvals/") && init?.method === "POST") return json({ ok: true, approval: {} }, 200);
     if (url === "/workers/api/diff") return json(diff);
     if (url === "/workers/ui/diff") return json({ message: "no worker named 'ui' in the active swarm" }, 404);
     if (url.startsWith("/workers/api/mentions")) return json({ ok: true, started: "api" }, 202);
@@ -235,5 +236,34 @@ describe("App", () => {
     await user.type(screen.getByLabelText(/Max workers/), "12");
     await user.click(screen.getByRole("button", { name: "Save limits" }));
     await waitFor(() => expect(JSON.parse(String(calls.find((c) => c.url === "/limits")?.init?.body))).toEqual({ maxWorkers: 12 }));
+  });
+
+  it("asks the human: approve a denied command, and resume a paused swarm", async () => {
+    const saved = { ...status, usage: { ...status.usage! } };
+    status.usage!.wakeups = 40;
+    status.pause = { paused: true, reason: "swarm budget exhausted: wake-ups 40/40", agents: ["api"] };
+    status.pendingApprovals = [{ id: "apr_1", worker: "api", command: "npm test", reason: "`npm` is not allowed. Granted commands: none", program: "npm",
+      status: "pending", decision: null, note: "", createdAt: "x", decidedAt: null }];
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      const q = await screen.findByRole("region", { name: "needs you" });
+      expect(within(q).getByText("npm test")).toBeTruthy();
+      expect(within(q).getByRole("alert", { name: "paused" }).textContent).toMatch(/wake-ups 40\/40/);
+      await user.type(within(q).getByLabelText("note for the worker"), "ok for tests");
+      await user.click(within(q).getByRole("button", { name: "Allow all npm commands" }));
+      await waitFor(() => expect(calls.some((c) => c.url === "/approvals/apr_1")).toBe(true));
+      expect(JSON.parse(String(calls.find((c) => c.url === "/approvals/apr_1")?.init?.body))).toEqual({ decision: "program", note: "ok for tests" });
+      await user.click(within(q).getByRole("button", { name: "Raise by 50% and resume" }));
+      await waitFor(() => expect(JSON.parse(String(calls.find((c) => c.url === "/limits")?.init?.body))).toEqual({ maxWakeups: 60 }));
+    } finally {
+      Object.assign(status, saved); delete status.pause; delete status.pendingApprovals;
+    }
+  });
+
+  it("shows nothing extra when no human is needed", async () => {
+    render(<App />);
+    await screen.findByText("taking api");
+    expect(screen.queryByRole("region", { name: "needs you" })).toBeNull();
   });
 });

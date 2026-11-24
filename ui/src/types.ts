@@ -1,5 +1,5 @@
-export type EventKind = "plan" | "claim" | "update" | "blocked" | "done" | "verify" | "nudge" | "mention" | "human" | "research" | "critique" | "decision";
-export const EVENT_KINDS: EventKind[] = ["plan", "claim", "update", "blocked", "done", "verify", "nudge", "mention", "human", "research", "critique", "decision"];
+export type EventKind = "plan" | "claim" | "update" | "blocked" | "done" | "verify" | "nudge" | "mention" | "human" | "research" | "critique" | "decision" | "approval";
+export const EVENT_KINDS: EventKind[] = ["plan", "claim", "update", "blocked", "done", "verify", "nudge", "mention", "human", "research", "critique", "decision", "approval"];
 
 export interface BoardEvent {
   seq: number;
@@ -60,10 +60,27 @@ export interface Budget {
   usage: { workers: number; wakeups: number; wall_s: number; tokens: number; tokens_cached: number };
 }
 
+export type ApprovalDecision = "allow" | "program" | "deny";
+export interface Approval {
+  id: string;
+  worker: string;
+  command: string;
+  reason: string;
+  program: string | null;
+  status: "pending" | "allowed" | "denied";
+  decision: ApprovalDecision | null;
+  note: string;
+  createdAt: string;
+  decidedAt: string | null;
+}
+export interface PauseState { paused: boolean; reason: string | null; agents: string[] }
+
 export interface StatusResponse extends Partial<Budget> {
   ok: boolean;
   allTasksSettled: boolean;
   unsettled: string[];
+  pendingApprovals?: Approval[];
+  pause?: PauseState;
   workers: WorkerView[];
   monitor: MonitorFinding[];
   digest: string;

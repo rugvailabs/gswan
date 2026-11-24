@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { BoardFeed } from "./components/BoardFeed";
 import { DiffPanel } from "./components/DiffPanel";
 import { Header } from "./components/Header";
+import { HumanQueue } from "./components/HumanQueue";
 import { MentionBox } from "./components/MentionBox";
 import { ReportPanel } from "./components/ReportPanel";
 import { WorkerCards } from "./components/WorkerCards";
@@ -22,6 +23,7 @@ export function App() {
           {!hasSwarm && <span className="tone-muted"> — start one with <code className="mono">swarm init "task"</code> or the /swarm skill.</span>}
         </div>
       )}
+      <HumanQueue />
       <WorkerCards />
       <DiffPanel />
       <ReportPanel />

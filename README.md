@@ -47,6 +47,10 @@ uv run --project /path/to/gswan swarm serve      # prints http://127.0.0.1:7777/
 ```
 Cards per worker (status, task, monitor warnings, activity, tokens), the live board with filters, and a box to `@mention` a worker or post a note.
 
+**Needs you.** When a worker's command is denied by the policy, it becomes a request on the dashboard: *Allow this command* (that exact command, for that worker), *Allow all `<program>` commands* (adds the grant) or *Deny* (with a note). The worker is told not to wait, and is woken with your answer. From the terminal: `swarm approvals`, `swarm approve <id> [--program]`, `swarm deny <id> --note "..."`. Agents cannot answer requests or change budgets.
+
+**Pause, not fail.** When a budget runs out, work pauses: queued messages stay queued and tasks waiting for verification are held, not escalated. *Raise by 50% and resume* on the dashboard (or `swarm limits --set ...`) picks everything up where it stopped.
+
 ## How it works
 | Piece | What it does |
 |---|---|

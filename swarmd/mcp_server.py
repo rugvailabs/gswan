@@ -14,7 +14,9 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from . import decisions, tokens
+from .approvals import ApprovalError, Approvals
 from .board import Board, NoActiveSwarm
+from .limits import BudgetExceeded
 from .cli import ensure_swarm_dir, find_root, open_board
 from .gate import Gate
 from .integrate import IntegrationError, Integrator
@@ -44,18 +46,61 @@ class SwarmTools:
     def _err(self, e: Exception) -> dict:
         return {"ok": False, "error": str(e)}
 
+    def budget_block(self) -> str | None:
+        """Why no new turn can start right now (a budget is used up), or None."""
+        try:
+            self.runner.limits.check_turn()
+        except BudgetExceeded as e:
+            return str(e)
+        except NoActiveSwarm:
+            return None
+        return None
+
     def _busy(self, name: str) -> bool:
         t = self.threads.get(name)
         if t and t.is_alive():
             return True
+        stopped = self.budget_block() is not None  # queued work cannot run until a human raises the budget: paused, not busy
         for n in (name, f"verify-{name}"):
             try:
                 w = self.runner.reg.get(n)
             except (WorkerError, NoActiveSwarm):
                 continue
-            if w.status == "running" or self.runner.reg.queue_len(w) > 0:
+            if w.status == "running" or (self.runner.reg.queue_len(w) > 0 and not stopped):
                 return True
         return False
+
+    def paused_view(self) -> dict:
+        why, held = self.budget_block(), [p["worker"] for p in self.gate.paused()]
+        queued = self.runner.pending() if why else []  # messages that cannot run until the budget is raised
+        agents = sorted(set(held) | set(queued))
+        return {"paused": bool(agents), "reason": why, "agents": agents}
+
+    def resume(self) -> list[str]:
+        """After a human raises a budget: run queued messages and paused verifications again."""
+        if self.budget_block():
+            return []
+        started = self.gate.resume()
+        for n in self.runner.pending():
+            if not (self.threads.get(n) and self.threads[n].is_alive()):
+                th = threading.Thread(target=self.gate.drain, args=(n,), name=f"resume-{n}", daemon=True)
+                self.threads[n] = th; th.start(); started.append(n)
+        return started
+
+    # ---- approvals (human-only: HTTP API / CLI; deliberately not an MCP tool) ---------------------------------
+    def list_approvals(self, status: str | None = "pending") -> dict:
+        try:
+            return {"ok": True, "approvals": [a.view() for a in Approvals(self.board).list(status or None)]}
+        except NoActiveSwarm as e:
+            return self._err(e)
+
+    def decide_approval(self, aid: str, decision: str, note: str = "") -> dict:
+        try:
+            a = Approvals(self.board).decide(aid, decision, note)
+        except (ApprovalError, NoActiveSwarm) as e:
+            return self._err(e)
+        self.invoke_worker(a.worker, Approvals.message(a), sender="human")  # wakes it, or queues behind its running turn
+        return {"ok": True, "approval": a.view()}
 
     def _worker_view(self, w) -> dict:
         try:
@@ -158,7 +203,11 @@ class SwarmTools:
         new = self.board.list_events(since_seq=self.cursor, limit=200).items
         if new:
             self.cursor = new[-1].seq
+        pause = self.paused_view()
         return {"ok": True, "timedOut": any(self._busy(n) for n in targets), "workers": views,
+                **({"paused": pause} if pause["paused"] else {}),
+                **({"pendingApprovals": [f"{a.id} {a.worker}: {a.command[:120]}" for a in Approvals(self.board).list("pending")]}
+                   if Approvals(self.board).list("pending") else {}),
                 "newEvents": [f"#{e.seq} {e.agent}/{e.kind}: {e.body[:300]}" for e in new]}  # events since the previous wait
 
     def merge_workers(self, auto_resolve: bool = True, order: list[str] | None = None, verify: bool = False) -> dict:
@@ -194,13 +243,14 @@ class SwarmTools:
             self.runner.limits.set(**kw)
         except (ValueError, NoActiveSwarm) as e:
             return self._err(e)
-        return {"ok": True, **self.runner.limits.snapshot()}
+        return {"ok": True, **self.runner.limits.snapshot(), "resumed": self.resume()}
 
     def swarm_status(self) -> dict:
         try:
             ws = [self._worker_view(w) for w in self.runner.reg.list() + self.runner.reg.list_researchers() + self.runner.reg.list_critics() if w.name == "plan-critic" or w.role != "critic"]
             unsettled = [t.worker for t in self.tasks.unsettled()]
-            return {"ok": True, **{k: v for k, v in self.runner.limits.snapshot().items()}, "allTasksSettled": not unsettled, "unsettled": unsettled, "missingDecisions": [o.view() for o in decisions.missing(self.board)], "workers": ws, "stale": [s.model_dump(by_alias=True) for s in self.board.stale(10)],
+            return {"ok": True, **{k: v for k, v in self.runner.limits.snapshot().items()}, "allTasksSettled": not unsettled, "unsettled": unsettled,
+                    "pendingApprovals": [a.view() for a in Approvals(self.board).list("pending")], "pause": self.paused_view(), "missingDecisions": [o.view() for o in decisions.missing(self.board)], "workers": ws, "stale": [s.model_dump(by_alias=True) for s in self.board.stale(10)],
                     "monitor": [{"worker": f.worker, "state": f.state, "detail": f.detail} for f in self.monitor.check()],
                     "digest": self.board.digest().text}
         except NoActiveSwarm as e:

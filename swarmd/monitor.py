@@ -118,6 +118,10 @@ class Monitor:
                 return Finding(w.name, "looping", f"last {t.loop_posts} board posts are identical: {mine[-1].body[:80]}")
             return Finding(w.name, "healthy", f"working ({w.activity_note or 'starting'})")
         task = self.tasks.get(w.name)
+        from .approvals import Approvals
+        waiting_on = [a.id for a in Approvals(self.board).list("pending", w.name)]
+        if waiting_on:
+            return Finding(w.name, "waiting", f"waiting for a human to answer approval request {', '.join(waiting_on)}")
         mine = self.board.list_events(agent=w.name, limit=500).items
         if mine and mine[-1].kind == "blocked" and task.status == "open":
             return Finding(w.name, "blocked", f"reported blocked: {mine[-1].body[:100]}")  # coordinator's call, not a stall
@@ -138,6 +142,10 @@ class Monitor:
         """Diagnose and act once. Returns findings with `action` filled in."""
         now = now or datetime.now(timezone.utc)
         self.dispatch()
+        try:
+            self.gate.resume()  # paused verifications restart once a human raised the budget (CLI or dashboard)
+        except Exception:
+            pass
         out = []
         for f in self.check(now):
             st = self.reg.mon_get(f.worker)

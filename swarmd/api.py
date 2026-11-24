@@ -48,6 +48,11 @@ class LimitsIn(CamelModel):
     max_tokens: int | None = Field(default=None, gt=0, le=1_000_000_000)
 
 
+class ApprovalIn(CamelModel):
+    decision: str = Field(pattern=r"^(allow|program|deny)$")
+    note: str = Field(default="", max_length=500)
+
+
 class MentionIn(CamelModel):
     message: str = Field(min_length=1, max_length=8000)
     sender: str = Field(default="human", pattern=r"^[A-Za-z0-9_.-]{1,64}$")
@@ -148,6 +153,20 @@ def create_app(board: Board, token: str | None = None, tools=None, ui_dir: Path 
             out = tools.set_limits(**{k: v for k, v in body.model_dump().items() if v is not None})
             if not out.get("ok"):
                 raise HTTPException(400, out.get("error", "invalid limits"))
+            return out
+
+        @app.get("/approvals", dependencies=guard)
+        def approvals(status: str = Query("pending", pattern="^(pending|allowed|denied|all)$")) -> dict:
+            out = tools.list_approvals(None if status == "all" else status)
+            if not out.get("ok"):
+                raise NoActiveSwarm(out.get("error", "no active swarm"))
+            return out
+
+        @app.post("/approvals/{aid}", dependencies=guard)
+        def decide(aid: str, body: ApprovalIn) -> dict:
+            out = tools.decide_approval(aid, body.decision, body.note)
+            if not out.get("ok"):
+                raise HTTPException(409 if "already" in out.get("error", "") or "meanwhile" in out.get("error", "") else 400, out.get("error"))
             return out
 
         @app.post("/workers/{name}/mentions", status_code=202, dependencies=guard)

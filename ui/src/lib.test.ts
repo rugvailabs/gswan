@@ -136,3 +136,15 @@ describe("replay", () => {
   });
   it("formats durations", () => expect([5, 75, 3725].map(duration)).toEqual(["5s", "1m 15s", "1h 2m"]));
 });
+
+
+describe("raiseExhausted", () => {
+  it("lifts only the budgets that are used up, by half again", async () => {
+    const { raiseExhausted } = await import("./lib");
+    const limits = { max_workers: 6, max_wakeups: 40, max_wall_s: 3600, max_tokens: 3000000 };
+    expect(raiseExhausted({ limits, usage: { workers: 2, wakeups: 40, wall_s: 10, tokens: 3100000, tokens_cached: 0 } })).toEqual({ maxWakeups: 60, maxTokens: 4500000 });
+    expect(raiseExhausted({ limits: { ...limits, max_wakeups: 1 }, usage: { workers: 1, wakeups: 1, wall_s: 3600, tokens: 0, tokens_cached: 0 } })).toEqual({ maxWakeups: 2, maxWallS: 5400 });
+    expect(raiseExhausted({ limits, usage: { workers: 1, wakeups: 1, wall_s: 1, tokens: 1, tokens_cached: 0 } })).toEqual({});
+    expect(raiseExhausted(undefined)).toEqual({});
+  });
+});

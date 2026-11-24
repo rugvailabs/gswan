@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { api, openStream } from "./api";
 import { mergeEvents } from "./lib";
-import type { BoardEvent, EventKind, LimitsDraft, StatusResponse, SwarmInfo, WorkerDraft } from "./types";
+import type { ApprovalDecision, BoardEvent, EventKind, LimitsDraft, StatusResponse, SwarmInfo, WorkerDraft } from "./types";
 
 interface State {
   token: string | null;
@@ -21,6 +21,7 @@ interface State {
   openThread: (a: string) => void;
   addWorker: (w: WorkerDraft) => Promise<void>;
   setLimits: (l: LimitsDraft) => Promise<void>;
+  decide: (id: string, decision: ApprovalDecision, note?: string) => Promise<void>;
   setToken: (t: string | null) => void;
   addEvents: (e: BoardEvent[]) => void;
   toggleKind: (k: EventKind) => void;
@@ -56,6 +57,9 @@ export const useStore = create<State>((set, get) => ({
   },
   setLimits: async (l) => {
     try { await api.setLimits(get().token, l); set({ error: null }); await get().refresh(); } catch (e) { set({ error: msg(e) }); throw e; }
+  },
+  decide: async (id, decision, note = "") => {
+    try { await api.decide(get().token, id, decision, note); set({ error: null }); await get().refresh(); } catch (e) { set({ error: msg(e) }); throw e; }
   },
   setToken: (token) => set({ token }),
   addEvents: (incoming) => set((s) => ({ events: mergeEvents(s.events, incoming) })),

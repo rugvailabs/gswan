@@ -42,15 +42,46 @@ def decide_bash(payload: dict, env: dict[str, str]) -> dict:
     except ValueError:
         grants = []
     wt = env.get("SWARM_WORKTREE") or os.getcwd()
+    role, board = env.get("SWARM_ROLE", "worker"), _board(env)
+    approved: set[str] = set()
+    if board is not None and role == "worker":
+        try:  # grants and approvals a human gave during this turn apply at once
+            from .approvals import Approvals, norm
+            from .workers import Registry
+            grants = sorted(set(grants) | set(Registry(board).get(env.get("SWARM_WORKER", "")).tools))
+            approved = Approvals(board).allowed_commands(env.get("SWARM_WORKER", ""))
+            if norm(cmd) in approved:
+                return _verdict("allow", "approved by a human for this worker")
+        except Exception:
+            pass
     try:
-        bashpolicy.check(cmd, role=env.get("SWARM_ROLE", "worker"), worktree=wt, cwd=payload.get("cwd") or wt, grants=grants,
+        bashpolicy.check(cmd, role=role, worktree=wt, cwd=payload.get("cwd") or wt, grants=grants,
                          cli_python=env.get("SWARM_PYTHON"), branch_prefix=env.get("SWARM_BRANCH_PREFIX"))
     except bashpolicy.Denied as e:
         _log_denial(env, cmd, str(e))
-        return _verdict("deny", f"swarm policy: {e}")
+        ask = ""
+        if board is not None and role == "worker":
+            try:
+                from .approvals import Approvals
+                ask = " " + Approvals(board).request(env.get("SWARM_WORKER", ""), cmd, str(e))[1]
+            except Exception:
+                pass
+        return _verdict("deny", f"swarm policy: {e}{ask.rstrip()}")
     if env.get("SWARM_ROLE") == "verifier":
         _record_run(env, cmd)
     return _verdict("allow", "allowed by swarm bash policy")
+
+
+def _board(env: dict[str, str]):
+    home = env.get("SWARM_HOME")
+    db = os.path.join(home, ".swarm", "swarm.db") if home else ""
+    if not (db and os.path.exists(db)):
+        return None
+    try:
+        from .board import Board
+        return Board(db)
+    except Exception:
+        return None
 
 
 def _record_run(env: dict[str, str], command: str) -> None:

@@ -414,7 +414,7 @@ class Runner:
                 had_error = True
                 self.board.post_once(EventIn(agent="swarmd", kind="blocked", body=str(e)[:2000]))
                 last = TurnResult(worker=name, ok=False, text=str(e), session_id=w.session_id,
-                                  turns_run=last.turns_run if last else 0)
+                                  turns_run=last.turns_run if last else 0, budget_stopped=True)
             except (RunnerError, WorkerError) as e:
                 had_error = True
                 self.board.post(EventIn(agent="swarmd", kind="blocked", body=f"worker {name}: {e}"[:2000]))
