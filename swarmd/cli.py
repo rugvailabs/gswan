@@ -126,6 +126,16 @@ def cmd_verdict(b: Board, a) -> int:
     if who != "human" and who != f"verify-{a.worker}":
         print(f"error: {who} may only verify '{who.removeprefix('verify-')}'", file=sys.stderr)
         return 3
+    if who != "human" and a.verdict == "pass":
+        from .workers import Registry, WorkerError
+        try:
+            missing = Tasks(b).missing_checks(a.worker, Registry(b).get(who).checks, who)
+        except (WorkerError, TaskError):
+            missing = []
+        if missing:
+            print("error: pass refused: run these required checks first, then give the verdict again: "
+                  + " ; ".join(missing), file=sys.stderr)
+            return 2
     try:
         t = Tasks(b).submit_verdict(a.worker, a.verdict == "pass", a.reason or [], verifier=who)
     except TaskError as exc:
@@ -295,7 +305,7 @@ def cmd_worker(b: Board, a, root: Path) -> int:
     gate = Gate(r)
     try:
         if a.wcmd == "define":
-            w = r.define(WorkerSpec(name=a.name, goal=a.goal, owns=a.owns, tools=a.tool or [], model=a.model))
+            w = r.define(WorkerSpec(name=a.name, goal=a.goal, owns=a.owns, tools=a.tool or [], model=a.model, checks=a.check or []))
             print(f"{w.id} {w.name} session={w.session_id}")
         elif a.wcmd == "list":
             for w in r.reg.list():
@@ -349,6 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("worker", help="define / list / @mention workers").add_subparsers(dest="wcmd", required=True)
     x = w.add_parser("define"); x.add_argument("name"); x.add_argument("--goal", required=True)
     x.add_argument("--owns", nargs="+", required=True); x.add_argument("--tool", action="append"); x.add_argument("--model", default="sonnet")
+    x.add_argument("--check", action="append", help="command the verifier must run before passing (repeatable)")
     w.add_parser("list")  # workers only
     x = w.add_parser("invoke"); x.add_argument("name"); x.add_argument("message"); x.add_argument("--sender", default="coordinator")
     x.add_argument("--json", action="store_true")

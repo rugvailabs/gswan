@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 EventKind = Literal[
@@ -93,6 +93,15 @@ class WorkerSpec(CamelModel):
     owns: list[str] = Field(min_length=1, max_length=32)  # paths relative to the worker's worktree
     tools: list[str] = Field(default_factory=list, max_length=32)  # extra allowed tools, e.g. "Bash(pytest:*)"
     model: str = "sonnet"
+    checks: list[str] = Field(default_factory=list, max_length=8)  # commands the verifier MUST run before it may pass the task
+
+    @field_validator("checks")
+    @classmethod
+    def _checks(cls, v: list[str]) -> list[str]:
+        v = [" ".join(c.split()) for c in v if c.strip()]
+        if any(len(c) > 300 for c in v):
+            raise ValueError("each check is one command of at most 300 characters")
+        return v
 
 
 class Worker(CamelModel):
@@ -104,6 +113,7 @@ class Worker(CamelModel):
     tools: list[str]
     model: str
     session_id: str
+    checks: list[str] = Field(default_factory=list)
     status: WorkerStatus
     worktree: str | None = None
     branch: str | None = None

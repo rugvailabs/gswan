@@ -48,7 +48,22 @@ def decide_bash(payload: dict, env: dict[str, str]) -> dict:
     except bashpolicy.Denied as e:
         _log_denial(env, cmd, str(e))
         return _verdict("deny", f"swarm policy: {e}")
+    if env.get("SWARM_ROLE") == "verifier":
+        _record_run(env, cmd)
     return _verdict("allow", "allowed by swarm bash policy")
+
+
+def _record_run(env: dict[str, str], command: str) -> None:
+    """Verifiers: remember allowed commands, so a pass verdict can be refused until the worker's required checks ran."""
+    home = env.get("SWARM_HOME")
+    if not home:
+        return
+    try:
+        from .board import Board
+        from .tasks import record_run
+        record_run(Board(os.path.join(home, ".swarm", "swarm.db")), env.get("SWARM_WORKER", ""), command)
+    except Exception:
+        pass  # bookkeeping must never break the hook
 
 
 def decide(payload: dict, env: dict[str, str]) -> dict | None:
@@ -63,6 +78,8 @@ def decide(payload: dict, env: dict[str, str]) -> dict | None:
     path = ti.get("file_path") or ti.get("notebook_path") or ""
     owns = [o for o in env.get("SWARM_OWNS", "").split(os.pathsep) if o]
     target = os.path.realpath(path) if path else ""
+    if path and ".git" in os.path.normpath(path).split(os.sep):  # a crafted .git/config (core.fsmonitor, hooks) runs commands on `git status`
+        return _verdict("deny", f"swarm policy: writing inside a .git directory is not allowed ({path})")
     ok = bool(target) and any(target == (r := os.path.realpath(o)) or target.startswith(r.rstrip(os.sep) + os.sep) for o in owns)
     if ok:
         return None

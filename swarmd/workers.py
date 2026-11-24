@@ -34,6 +34,7 @@ def pid_alive(pid: int | None) -> bool:
 def _worker(r) -> Worker:
     d = dict(r)
     d["owns"], d["tools"] = json.loads(d["owns"]), json.loads(d["tools"])
+    d["checks"] = json.loads(d.get("checks") or "[]")
     d["recent_tools"] = json.loads(d.get("recent_tools") or "[]")
     return Worker(**d)
 
@@ -51,15 +52,15 @@ class Registry:
         now = utc_now()
         w = Worker(id=new_id("wrk"), swarm_id=sw.id, name=spec.name, goal=spec.goal, owns=spec.owns,
                    tools=spec.tools, model=spec.model, session_id=str(uuid.uuid4()), status="idle",
-                   created_at=now, updated_at=now)
+                   checks=spec.checks, created_at=now, updated_at=now)
         with self.b._conn() as c:
             if c.execute("SELECT 1 FROM workers WHERE swarm_id=? AND name=?", (sw.id, w.name)).fetchone():
                 raise WorkerError(f"worker '{w.name}' already exists in this swarm")
             c.execute(
-                "INSERT INTO workers (id,swarm_id,name,goal,owns,tools,model,session_id,status,created_at,updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO workers (id,swarm_id,name,goal,owns,tools,model,session_id,status,checks,created_at,updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (w.id, w.swarm_id, w.name, w.goal, json.dumps(w.owns), json.dumps(w.tools), w.model,
-                 w.session_id, w.status, now, now))
+                 w.session_id, w.status, json.dumps(w.checks), now, now))
         Tasks(self.b).ensure(w.name, w.goal)
         return w
 
@@ -72,12 +73,12 @@ class Registry:
             pass
         w = Worker(id=new_id("wrk"), swarm_id=target.swarm_id, name=name, goal=f"verify the work of {target.name}",
                    owns=[], tools=target.tools, model=model, session_id=str(uuid.uuid4()), status="idle",
-                   role="verifier", cwd=target.worktree, created_at=now, updated_at=now)
+                   role="verifier", cwd=target.worktree, checks=target.checks, created_at=now, updated_at=now)
         with self.b._conn() as c:
-            c.execute("INSERT INTO workers (id,swarm_id,name,goal,owns,tools,model,session_id,status,role,cwd,created_at,updated_at)"
-                      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO workers (id,swarm_id,name,goal,owns,tools,model,session_id,status,role,cwd,checks,created_at,updated_at)"
+                      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (w.id, w.swarm_id, w.name, w.goal, "[]", json.dumps(w.tools), w.model, w.session_id, "idle",
-                       "verifier", w.cwd, now, now))
+                       "verifier", w.cwd, json.dumps(w.checks), now, now))
         return w
 
     MAX_RESEARCHERS = 4  # per swarm; researchers cost tokens but are not workers, so they have their own cap

@@ -65,7 +65,7 @@ class SwarmTools:
             task = None
         return {"task": task, "name": w.name, "status": w.status, "busy": self._busy(w.name), "turns": w.turns,
                 "tokens": tokens.worker_view(w), "owns": w.owns, "branch": w.branch, "model": w.model, "queue": self.runner.reg.queue_len(w),
-                "recentTools": w.recent_tools, "lastActivity": w.last_activity, "activityNote": w.activity_note,
+                "recentTools": w.recent_tools, "checks": w.checks, "lastActivity": w.last_activity, "activityNote": w.activity_note,
                 "worktree": w.worktree, "lastError": w.last_error, "lastResult": self.last.get(w.name)}
 
     # ---- coordinator tools ----------------------------------------------------
@@ -79,12 +79,20 @@ class SwarmTools:
         return {"ok": True, "swarmId": sw.id, "task": sw.task, **self.runner.limits.snapshot()}
 
     def define_worker(self, name: str, goal: str, owns: list[str], tools: list[str] | None = None,
-                      model: str = "sonnet") -> dict:
+                      model: str = "sonnet", checks: list[str] | None = None) -> dict:
+        from . import bashpolicy
         try:
-            w = self.runner.define(WorkerSpec(name=name, goal=goal, owns=owns, tools=tools or [], model=model))
+            spec = WorkerSpec(name=name, goal=goal, owns=owns, tools=tools or [], model=model, checks=checks or [])
+            for c in spec.checks:  # a check the verifier is not allowed to run would make every pass impossible
+                try:
+                    bashpolicy.check(c, role="verifier", worktree=str(self.runner.root), cwd=None, grants=spec.tools,
+                                     cli_python=None, branch_prefix=None, env={})
+                except bashpolicy.Denied as d:
+                    raise ValueError(f"check `{c}` could not run under the verifier's command policy ({d}); grant it in tools, e.g. 'Bash({c.split()[0]}:*)'")
+            w = self.runner.define(spec)
         except (ValueError, WorkerError, NoActiveSwarm) as e:
             return self._err(e)
-        return {"ok": True, "worker": w.name, "id": w.id, "owns": w.owns}
+        return {"ok": True, "worker": w.name, "id": w.id, "owns": w.owns, "checks": w.checks}
 
     def critique_plan(self, plan: str, model: str = "sonnet") -> dict:
         """Start a read-only plan critic on your plan BEFORE invoking workers. Findings arrive as `critique` events on target `plan`."""
@@ -229,10 +237,13 @@ def build_server(tools: SwarmTools, role: str = "coordinator") -> MCPServer:
         srv.add_tool(tools.swarm_start, name="swarm_start", description="Start a new swarm for a task (archives the previous one).")
         srv.add_tool(tools.define_worker, name="define_worker", description=(
             "Register a named worker: goal, owns (paths it may write, relative to its own git worktree; must not overlap "
-            "other workers), optional extra allowed tools like 'Bash(pytest:*)', model (sonnet|haiku|opus)."))
+            "other workers), optional extra allowed tools like 'Bash(pytest:*)', model (sonnet|haiku|opus), and checks: the exact "
+            "commands that prove the goal (e.g. 'python3 -m pytest tests/test_api.py'). The verifier must run every check before it "
+            "may pass the task, and the integration verifier runs all of them on the merged branch; each must be allowed by tools."))
         srv.add_tool(tools.critique_plan, name="critique_plan", description=(
             "Run a read-only plan critic on your plan before invoking workers (wait_for_workers, then read `critique` events and fix the plan). "
-            "Pass critics=true to swarm_start to also have diff critics (correctness/security/tests) review each worker before the verifier."))
+            "Pass critics=true to swarm_start to also have diff critics review each worker before the verifier: one combined critic for "
+            "small diffs, three (correctness/security/tests) for big ones, none for docs-only diffs; blockers gate, majors go back once."))
         srv.add_tool(tools.define_researcher, name="define_researcher", description=(
             "Register a read-only research agent (repo + web, cites sources). `question` is one focused question. Wake it with "
             "invoke_worker; it posts `research` events. Max 4 per swarm. Use before planning or when a worker is blocked on facts."))

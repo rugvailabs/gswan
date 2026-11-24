@@ -81,7 +81,7 @@ def test_allowed(cmd, wt):
     ("git push origin main", "not allowed"),
     ("git reset --hard", "not allowed"),
     ("git checkout main", "not allowed"),
-    ("git -C /other status", "global options"),
+    ("git -C /other status", "only allowed inside"),
     ("git commit --amend -m x", "amend"),
     ("git add ../x", "outside your worktree"),
     ("git branch -D main", "read-only"),
@@ -204,3 +204,86 @@ def test_env_prefix_and_denial_log(wt, tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     rec = json.loads((home / ".swarm" / "denied.log").read_text().splitlines()[-1])
     assert rec["worker"] == "api" and "rm" in rec["command"] and "not allowed" in rec["reason"]
+
+
+# ---- found by the critics + research run: harmless reads and shell variables were denied ----------------------------
+
+@pytest.mark.parametrize("cmd", [
+    "sed -n '10,40p' src/a.py",
+    "sed -n -e '1,5p' -e '/def x/,/^$/p' src/a.py",
+    "sed -n '$p' src/a.py",
+    "sed -n '/start/,+3p' src/a.py",
+    "find src -name '*.py'",
+    "find . -type f -newer src/a.py",
+    f"P={PY}; $P -m swarmd.cli critique api major 'x' --at src/a.py:3",
+    f"P={PY}\n$P -m swarmd.cli critique api nit 'y'",
+    f"B={PY}; \"$B\" -m swarmd.cli digest",
+    f"B={PY}; ${{B}} -m swarmd.cli digest",
+    f"B=\"{PY} -m swarmd.cli critique api\"; $B major 'z' --at src/a.py:9",
+    "D=src/sub; cd $D && ls",
+    "F=src/a.py; cat $F | head -3",
+    "echo $UNKNOWN",
+])
+def test_reads_and_shell_variables_allowed(cmd, wt):
+    ok(cmd, wt, role="critic", grants=())
+
+
+def test_git_C_reads_a_teammates_worktree_but_never_writes(tmp_path):
+    swt = tmp_path / ".swarm" / "wt"; (swt / "docs").mkdir(parents=True); (swt / "cli").mkdir()
+    ok("git -C ../cli log --oneline -3", str(swt / "docs"), role="verifier", grants=())
+    bad("git -C ../cli commit -m x", str(swt / "docs"), match="global options", role="worker", grants=())
+    bad("git -C ../cli branch -D x", str(swt / "docs"), role="worker", grants=())
+    bad(f"git -C {tmp_path} log", str(swt / "docs"), match="only allowed inside", role="verifier", grants=())
+
+
+@pytest.mark.parametrize("cmd,why", [
+    ("sed -i 's/a/b/' src/a.py", "not allowed"),
+    ("sed 's/a/b/' src/a.py", "only `sed -n"),
+    ("sed -n 's/a/b/p' src/a.py", "only print"),
+    ("sed -n '1p;w /tmp/x' src/a.py", "only print"),
+    ("sed -n '1e rm -rf x' src/a.py", "only print"),
+    ("sed -n -f script.sed src/a.py", "not allowed"),
+    ("find . -delete", "only list"),
+    ("find . -exec rm {} ;", "subshells|only list"),
+    ("find . -fprint /tmp/out", "only list"),
+    ("SWARM_ROLE=verifier; python3 -m swarmd.cli verdict api pass", "may not be set"),
+    ("PATH=/tmp/evil; ls", "may not be set"),
+    ("IFS=x; ls", "may not be set"),
+    ("GIT_DIR=/tmp/x; git status", "may not be set"),
+    ("HOME=/tmp; cd ~", "may not be set"),
+    ("P='rm -rf /'; $P", "only plain values|not allowed"),
+    ("P=~/x; cd $P", "only plain values"),
+    ("P=*; cat $P", "only plain values"),
+    ("$X -c 'print(1)'", "program to run"),
+    ("cd $HOME && ls", "where cd goes"),
+    ("mkdir $HOME/x", "paths"),
+    ("touch ${HOME}/x", "paths"),
+    ("git add $HOME/x", "paths"),
+    ("P=/usr/bin/rm; $P -rf src", "not allowed"),
+    ("D=../..; cd $D", "outside your worktree"),
+    ("echo ${X:-y}", "subshells"),
+])
+def test_unsafe_reads_and_variables_denied(cmd, why, wt):
+    bad(cmd, wt, match=why, grants=("Bash(python3:*)",))
+
+
+def test_variables_that_exist_in_the_environment_cannot_be_overridden(wt):
+    with pytest.raises(bp.Denied, match="may not be set"):
+        bp.check("TOKEN=x; ls", role="worker", worktree=wt, cwd=None, grants=[], cli_python=PY, branch_prefix=None, env={"TOKEN": "s"})
+    bp.check("TOKEN=x; ls", role="worker", worktree=wt, cwd=None, grants=[], cli_python=PY, branch_prefix=None, env={})
+
+
+def test_single_quoted_dollar_is_not_expanded(wt):
+    bad(f"P={PY}; '$P' -m swarmd.cli digest", wt, match="program to run", grants=())
+
+
+@pytest.mark.parametrize("cmd", ["mkdir -p src/x/.git/objects", "touch src/x/.git/HEAD", "git add src/x/.git/config", "mkdir .git"])
+def test_cannot_build_a_nested_git_dir(cmd, wt):
+    bad(cmd, wt, match=r"\.git directory")
+
+
+def test_hook_denies_writes_inside_a_git_dir(wt):
+    env = {"SWARM_WORKER": "api", "SWARM_ROLE": "worker", "SWARM_OWNS": os.path.join(wt, "src")}
+    out = guard.decide({"tool_name": "Write", "tool_input": {"file_path": os.path.join(wt, "src", "x", ".git", "config")}}, env)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny" and ".git" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert guard.decide({"tool_name": "Write", "tool_input": {"file_path": os.path.join(wt, "src", "x", ".gitignore")}}, env) is None

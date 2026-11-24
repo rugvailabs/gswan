@@ -8,6 +8,15 @@ Parsing is deliberately strict: command substitution ($(...), backticks), unquot
 `>/dev/null`), background `&`, subshells and grouping are rejected. `;`, `&&`, `||`, `|` and newlines split a command
 into simple commands that are checked one by one. `cd` is tracked and must stay inside the worker's worktree.
 
+Shell variables: a segment made only of assignments (`P=/path/to/python3`) sets a variable for the rest of the command,
+and later `$P` / `${P}` are expanded before the next segments are checked, so what runs is what was judged. Values must
+be plain text (no quotes, `$`, globs, `~` or backslashes) and names that already exist in the environment (SWARM_*, PATH,
+HOME, ...) or that change how the shell or tools behave are refused. An unknown `$VAR` is not allowed where it would
+decide a path (`cd`, mkdir/touch, git add) or the program to run.
+
+Read-only extras (found by a real run, where critics and verifiers were denied harmless reads): `sed -n` with print-only
+scripts, `find` without actions (-exec, -delete, ...), and `git -C <dir>` with a read subcommand inside this swarm's worktrees.
+
 Granted tools come from `define_worker(tools=[...])` as `Bash(prog:*)` / `Bash(prog sub:*)` / exact `Bash(full cmd)`.
 A grant such as `python3` is still arbitrary code execution (python3 -c can do anything): grant narrowly
 (`Bash(python3 -m pytest:*)`). This policy removes friction; it is not a sandbox.
@@ -27,6 +36,16 @@ GIT_WRITE = {"add", "commit"}
 GIT_MERGE_FLAGS = {"--no-edit", "--no-ff", "--ff", "--ff-only", "--no-commit"}
 _REDIRECT_OK = re.compile(r"(?<=\s)(?:\d?>&\d|\d?>>?\s?/dev/null|&>\s?/dev/null)(?=[\s;|&]|$)")  # may be followed directly by ; | && (found by a real run: `ls 2>&1; git status`)
 _ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
+_VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+_SAFE_VALUE = re.compile(r"^[A-Za-z0-9_./:@%+=, -]*$")
+_SHELL_NAMES = {"PATH", "IFS", "HOME", "CDPATH", "ENV", "BASH_ENV", "PS1", "PS2", "PS4", "PROMPT_COMMAND", "SHELL", "SHELLOPTS",
+                "BASHOPTS", "TMPDIR", "PWD", "OLDPWD", "USER", "LOGNAME", "EDITOR", "VISUAL", "PAGER", "GLOBIGNORE", "HISTFILE",
+                "FPATH", "ZDOTDIR", "TERM", "OPTIND", "OPTARG", "MAIL", "MAILPATH", "PROMPT", "RPROMPT", "precmd", "preexec"}
+_SHELL_PREFIXES = ("SWARM_", "CLAUDE", "ANTHROPIC", "GIT_", "LD_", "DYLD_", "PYTHON", "NODE", "NPM_", "npm_", "BASH", "ZSH", "SSH_",
+                   "UV_", "PIP_", "VIRTUAL_ENV", "CONDA", "LC_", "XDG_")
+_SED_PRINT = re.compile(r"^\s*(?:(?:\d+|\$|/[^/]*/)(?:\s*,\s*(?:\d+|\$|/[^/]*/|\+\d+))?\s*)?p\s*$")
+_SED_FLAGS = {"-n", "-E", "-r", "--quiet", "--silent", "-s", "-u"}
+_FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
 
 
 READ_ONLY_ROLES = ("verifier", "researcher", "critic")
@@ -63,6 +82,8 @@ def split_commands(cmd: str) -> list[str]:
                 raise Denied("command substitution is not allowed")
             elif ch in "<>":
                 raise Denied("redirections are not allowed (only 2>&1 and >/dev/null)")
+            elif ch == "$" and nxt == "{" and (m := _VAR.match(cmd, i)) and m.group(1):
+                cur.append(m.group(0)); i = m.end(); continue
             elif ch in "(){}":
                 raise Denied("subshells and grouping are not allowed")
             elif ch == "&":
@@ -112,18 +133,59 @@ def _matches(words: list[str], grants: list[tuple[list[str], bool]]) -> bool:
     return False
 
 
+def _expand(seg: str, shell_vars: dict[str, str]) -> str:
+    """Replace $NAME / ${NAME} of variables set earlier in this command, outside single quotes (as the shell does)."""
+    out, quote, i = [], None, 0
+    while i < len(seg):
+        ch = seg[i]
+        if ch == "\\" and quote != "'" and i + 1 < len(seg):
+            out.append(seg[i:i + 2]); i += 2; continue
+        if ch in "'\"" and (quote is None or quote == ch):
+            quote = None if quote else ch
+        elif ch == "$" and quote != "'" and (m := _VAR.match(seg, i)):
+            name = m.group(1) or m.group(2)
+            if name in shell_vars:
+                out.append(shell_vars[name]); i = m.end(); continue
+        out.append(ch); i += 1
+    return "".join(out)
+
+
+def _settable(name: str, env) -> bool:
+    if name in ENV_OK:
+        return True
+    return not (name in env or name in _SHELL_NAMES or name.startswith(_SHELL_PREFIXES))
+
+
+def _no_var(words: list[str], what: str) -> None:
+    if any("$" in w for w in words):
+        raise Denied(f"an unknown $variable may not decide {what}; set it earlier in the same command (NAME=value) or write the value")
+
+
 def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: list[str], cli_python: str | None,
-          branch_prefix: str | None) -> None:
-    """Raise Denied (with a model-readable reason) unless every simple command in `command` is allowed."""
+          branch_prefix: str | None, env=None) -> None:
+    """Raise Denied (with a model-readable reason) unless every simple command in `command` is allowed.
+    `env` is the environment the shell runs with (default: this process's), used to refuse overriding existing variables."""
+    env = os.environ if env is None else env
     parsed = [g for g in (parse_grant(t) for t in grants) if g]
     cur = cwd or worktree
     if not _inside(cur, worktree):
         raise Denied(f"working directory {cur} is outside your worktree")
+    shell_vars: dict[str, str] = {}
     for seg in split_commands(command):
+        seg = _expand(seg, shell_vars)
         try:
             words = shlex.split(seg)
         except ValueError:
             raise Denied(f"cannot parse: {seg[:80]}")
+        if words and all(_ASSIGN.match(w) for w in words):  # `P=value` alone: a shell variable for later segments
+            for w in words:
+                name, value = w.split("=", 1)
+                if not _settable(name, env):
+                    raise Denied(f"variable {name} may not be set (it exists in the environment or changes how the shell or tools behave); use another name")
+                if not _SAFE_VALUE.match(value):
+                    raise Denied(f"variable {name}: only plain values are allowed (no quotes, $, *, ?, ~ or backslashes)")
+                shell_vars[name] = value
+            continue
         while words and (m := _ASSIGN.match(words[0])):
             if m.group(1) not in ENV_OK:
                 raise Denied(f"environment variable {m.group(1)} may not be set (allowed: {', '.join(sorted(ENV_OK))})")
@@ -138,8 +200,10 @@ def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: li
                 raise Denied("env is only allowed as `env VAR=value command ...`")
         if not words:
             continue
+        _no_var(words[:1], "the program to run")
         prog = os.path.basename(words[0])
         if prog == "cd":
+            _no_var(words[1:], "where cd goes")
             if len(words) != 2 or words[1].startswith("~") or words[1] == "-":
                 raise Denied("use `cd <relative dir>` inside your worktree")
             cur = os.path.realpath(os.path.join(cur, words[1]))
@@ -152,9 +216,18 @@ def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: li
             if prog == "sort" and any(a.startswith("-o") for a in words[1:]):
                 raise Denied("sort -o writes files")
             continue
+        if prog == "sed":
+            _check_sed(words)
+            continue
+        if prog == "find":
+            if bad := [a for a in words[1:] if a in _FIND_ACTIONS]:
+                raise Denied(f"find {bad[0]} is not allowed (find may only list files)")
+            continue
         if prog in WRITE_PROGS:
             if role in READ_ONLY_ROLES:
                 raise Denied("verifiers and researchers are read-only")
+            _no_var(words[1:], f"{prog}'s paths")
+            _no_git_dir(words[1:])
             for a in (x for x in words[1:] if not x.startswith("-")):
                 if not _inside(os.path.join(cur, a), worktree):
                     raise Denied(f"{prog} outside your worktree: {a}")
@@ -169,9 +242,43 @@ def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: li
                      f"mkdir, touch, ls, cat, grep, echo and similar read commands. If you need another command, post a `blocked` event.")
 
 
+def _no_git_dir(paths: list[str]) -> None:
+    """A nested .git/ that a worker built (config with core.fsmonitor or hooks) would make a later `git status` run any command."""
+    if any(".git" in os.path.normpath(p).split(os.sep) for p in paths if not p.startswith("-")):
+        raise Denied("creating or adding files inside a .git directory is not allowed")
+
+
+def _check_sed(words: list[str]) -> None:
+    """Read-only sed: -n with print-only scripts (`sed -n '10,40p' f`, `sed -n '/def x/,/^$/p' f`)."""
+    args, scripts, files, i = words[1:], [], [], 0
+    while i < len(args):
+        a = args[i]
+        if a == "-e" and i + 1 < len(args):
+            scripts.append(args[i + 1]); i += 2; continue
+        if a.startswith("-"):
+            if a not in _SED_FLAGS:
+                raise Denied(f"sed {a} is not allowed (only `sed -n '<lines>p' file` for reading)")
+        elif not scripts:
+            scripts.append(a)
+        else:
+            files.append(a)
+        i += 1
+    if "-n" not in args and "--quiet" not in args and "--silent" not in args:
+        raise Denied("only `sed -n '<lines>p' file` is allowed (reading lines)")
+    parts = [p for s in scripts for p in s.split(";") if p.strip()]
+    if not parts or not all(_SED_PRINT.match(p) for p in parts):
+        raise Denied("sed scripts may only print lines (e.g. '10,40p' or '/start/,/end/p')")
+
+
 def _check_git(words: list[str], role: str, cur: str, worktree: str, branch_prefix: str | None) -> None:
+    if len(words) >= 4 and words[1] == "-C" and words[3] in GIT_READ and words[3] != "branch":
+        target = os.path.join(cur, words[2])
+        swarm_wt = os.path.dirname(os.path.realpath(worktree))  # .swarm/wt holds this swarm's worktrees (a verifier reads a teammate's)
+        if _inside(target, worktree) or (os.path.basename(swarm_wt) == "wt" and _inside(target, swarm_wt)):
+            return  # read subcommands only, and only inside this swarm's worktrees
+        raise Denied(f"git -C is only allowed inside this swarm's worktrees: {words[2]}")
     if len(words) < 2 or words[1].startswith("-"):
-        raise Denied("use `git <subcommand> ...` without global options such as -C or -c")
+        raise Denied("use `git <subcommand> ...` without global options such as -C or -c (git -C <dir> is allowed for reads)")
     sub, args = words[1], words[2:]
     if sub in GIT_READ:
         if sub == "branch" and any(not a.startswith("-") or a in ("-d", "-D", "-m", "-M", "--delete") for a in args):
@@ -181,6 +288,8 @@ def _check_git(words: list[str], role: str, cur: str, worktree: str, branch_pref
         raise Denied(f"read-only role: git {sub} is not allowed")
     if sub in GIT_WRITE:
         if sub == "add":
+            _no_var(args, "git add's paths")
+            _no_git_dir(args)
             for a in (x for x in args if not x.startswith("-")):
                 if not _inside(os.path.join(cur, a), worktree):
                     raise Denied(f"git add outside your worktree: {a}")

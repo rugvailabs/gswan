@@ -66,8 +66,9 @@ class Integrator:
             pass
         workers = [w for w in self.reg.list()]
         tools = sorted({t for w in workers for t in w.tools})
+        checks = list(dict.fromkeys(c for w in workers for c in w.checks))[:8]  # the merged branch must pass every worker's checks
         w = self.reg.define(WorkerSpec(name="integrator", goal="resolve merge conflicts between worker branches in the integration worktree and keep the combined code working",
-                                       owns=["."], tools=tools, model="sonnet"), exempt_limit=True)
+                                       owns=["."], tools=tools, model="sonnet", checks=checks), exempt_limit=True)
         self.reg.set_worktree(w, str(wt), branch)
         base = next((x.base_sha for x in workers if x.base_sha), None)
         if base:

@@ -79,11 +79,70 @@ def test_rounds_are_capped_and_remaining_blockers_reach_the_verifier(repo):
     assert Tasks(board).get("api").status == "done"
 
 
-def test_majors_and_nits_do_not_gate(repo):
-    board, r, ex, gate = setup(repo, [[("major", "a.py:9", "no test for error path"), ("nit", "", "naming")]])
+def test_nits_alone_do_not_go_back(repo):
+    board, r, ex, gate = setup(repo, [[("nit", "", "naming")]])
     gate.invoke("api", "go")
     assert [x for x in roles(ex) if x[0] == "worker"] == [("worker", "api")]  # worker ran once
-    assert Critiques(board).rounds("api") == 1 and len(Critiques(board).list("api")) == 2
+    assert Critiques(board).rounds("api") == 1 and Tasks(board).get("api").status == "done"
+
+
+def test_majors_go_back_once_then_the_verifier_checks_them(repo):
+    board, r, ex, gate = setup(repo, [[("major", "a.py:9", "no test for error path"), ("nit", "", "naming")],
+                                      [("major", "a.py:12", "would be reported if a second round ran")]])
+    gate.invoke("api", "go")
+    seq = roles(ex)
+    assert [x for x in seq if x[0] == "worker"] == [("worker", "api")] * 2  # one fix-or-explain turn
+    assert sum(1 for x in seq if x[0] == "critic") == 2  # one round (2 personas); no second critic round
+    i_fix = [i for i, x in enumerate(seq) if x == ("worker", "api")][1]
+    assert "MAJOR" in ex.calls[i_fix][2] and "a.py:9" in ex.calls[i_fix][2]
+    v_prompt = next(c[2] for c in ex.calls if c[0] == "verifier")
+    assert "Critic majors sent to the worker" in v_prompt and "a.py:9" in v_prompt
+    t = Tasks(board).get("api")
+    assert t.status == "done" and t.rounds == 0
+    from swarmd import decisions
+    assert decisions.missing(board) == [o for o in decisions.missing(board) if o.topic == "split"]  # majors need no decision
+
+
+def commit(r, name, files):
+    wt = r.ensure_worktree(r.reg.get(name))
+    for path, text in files.items():
+        (wt / path).parent.mkdir(parents=True, exist_ok=True); (wt / path).write_text(text)
+    git(wt, "add", "."); git(wt, "commit", "-qm", "work")
+
+
+def test_docs_only_diff_skips_critics(repo):
+    board, r, ex, gate = setup(repo, [[("blocker", "docs/a.md:1", "would block")]])
+    commit(r, "api", {"docs/usage.md": "# usage\n", "README.md": "x\n"})
+    gate.invoke("api", "go")
+    assert not [x for x in roles(ex) if x[0] == "critic"] and Tasks(board).get("api").status == "done"
+    assert any("critics skipped for api: only documentation changed" in e.body for e in board.list_events().items)
+
+
+def test_small_diff_gets_one_combined_critic(repo):
+    board, r, ex, gate = setup(repo, [])
+    commit(r, "api", {"src/api/a.py": "x = 1\n" * 20})
+    gate.invoke("api", "go")
+    crit = [c for c in ex.calls if c[0] == "critic"]
+    assert [c[1] for c in crit] == ["critic-api-general"]
+    assert "correctness:" in crit[0][2] and "security:" in crit[0][2] and "tests:" in crit[0][2]
+
+
+def test_big_diff_keeps_every_persona(repo):
+    from swarmd.critics import SMALL_DIFF
+    board, r, ex, gate = setup(repo, [])
+    commit(r, "api", {"src/api/a.py": "x = 1\n" * (SMALL_DIFF + 5)})
+    gate.invoke("api", "go")
+    assert {c[1] for c in ex.calls if c[0] == "critic"} == {"critic-api-correctness", "critic-api-security"}
+
+
+def test_choose_personas():
+    from swarmd.critics import choose_personas
+    full = ("correctness", "security", "tests")
+    assert choose_personas(full, None) == (full, "")
+    assert choose_personas(full, []) == (full, "")
+    assert choose_personas(full, [("docs/x.py", 5), ("a.md", 3)])[0] == ()
+    assert choose_personas(full, [("a.md", 3), ("src/x.py", 3)])[0] == ("general",)
+    assert choose_personas(("tests",), [("src/x.py", 3)])[0] == ("tests",)
 
 
 def test_critics_off_by_default(repo):

@@ -213,7 +213,9 @@ class Runner:
             f"missing tests the goal needs, edits outside owned paths, unrelated changes, claims you cannot confirm. "
             f"Give the verdict exactly once with the board CLI: `{self.cli} verdict <worker> pass --reason \"<evidence>\"` or "
             f"`{self.cli} verdict <worker> fail --reason \"<specific reproducible problem>\"` (repeat --reason for several). "
-            f"Use plain single commands (no cd, &&, pipes). If you could not run a check, say so in the reason."
+            f"If the brief lists required checks, run each exactly as written (flags may be appended): a pass verdict is refused until "
+            f"every one has run. Shell: read commands (cat, grep, sed -n, find), `cd <subdir> &&`, `;` and pipes work; redirections "
+            f"and $(...) do not. If you could not run a check, say so in the reason."
         )
 
     def researcher_charter(self, w: Worker) -> str:
@@ -230,7 +232,9 @@ class Runner:
     def critic_charter(self, w: Worker) -> str:
         return (
             f"You are swarm critic '{w.name}'. Focus: {w.goal}\n"
-            f"You attack work; you do not fix it and you CANNOT edit files (Read, Glob, Grep and read-only git/ls/cat only). "
+            f"You attack work; you do not fix it. You CANNOT edit files or run programs or tests (no python3, no test runners): "
+            f"read the code with Read, Grep, git diff/show, cat, sed -n and find, and reason about what it does. "
+            f"To shorten repeated board calls you may set a variable first, e.g. `P={sys.executable}; $P -m swarmd.cli critique ...`. "
             f"You see the task and the changes, not the author's reasoning: read the actual diff and files, never trust summaries. "
             f"Report each problem with the board CLI: `{self.cli} critique <target> blocker|major|nit \"<what fails and with what input>\" --at path/file.py:LINE`. "
             f"blocker = wrong/unsafe/unmet requirement that must be fixed before merge; major = real weakness worth fixing; nit = style. "

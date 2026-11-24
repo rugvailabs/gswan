@@ -76,6 +76,22 @@ class Tasks:
             self.b.post(EventIn(agent=who, kind="verify", body=f"fail {worker}: " + " | ".join(f"{i}. {r}" for i, r in enumerate(reasons, 1)), refs=[f"task:{worker}:failed"]))
         return self.get(worker)
 
+    def missing_checks(self, worker: str, checks: list[str], verifier: str) -> list[str]:
+        """Required checks the verifier has not run since this verification round started."""
+        if not checks:
+            return []
+        t, sw = self.get(worker), self.b._require()
+        with self.b._conn() as c:
+            ran = [" ".join(r["command"].split()) for r in c.execute(
+                "SELECT command FROM ran_commands WHERE swarm_id=? AND worker=? AND ts>=?", (sw.id, verifier, t.updated_at))]
+        return [chk for chk in checks if not any(" ".join(chk.split()) in r for r in ran)]
+
     def unsettled(self) -> list[Task]:
         """Tasks that still block finishing the swarm (escalated ones need a human, so they do not block)."""
         return [t for t in self.list() if t.status not in ("done", "escalated")]
+
+
+def record_run(board: Board, worker: str, command: str) -> None:
+    sw = board._require()
+    with board._conn() as c:
+        c.execute("INSERT INTO ran_commands (swarm_id,worker,ts,command) VALUES (?,?,?,?)", (sw.id, worker, utc_now(), command[:2000]))

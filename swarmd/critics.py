@@ -1,5 +1,9 @@
 """Critic findings. Critics attack work (a plan before workers start, a worker's diff before the verifier); the verifier
-checks the goal afterwards. Findings are severity-tagged; only `blocker`s gate a task. Rounds are capped (MAX_CRITIC_ROUNDS)."""
+checks the goal afterwards. Findings are severity-tagged; `blocker`s gate a task, `major`s go back to the worker once (fix or
+explain) without another critic round. Rounds are capped (MAX_CRITIC_ROUNDS).
+
+Cost control (a real run spent 58% of its tokens on critics that found no blockers): a diff that only touches docs gets no
+critics, and a small diff gets one combined critic instead of one per persona (`choose_personas`)."""
 from __future__ import annotations
 
 import re
@@ -15,6 +19,26 @@ PERSONAS = {
     "security": "injection, unsafe file/shell/network use, secrets, authz gaps, unvalidated input, unsafe deserialization, dependency risk",
     "tests": "missing or weak tests for the goal, tests that cannot fail, untested error paths, unmaintainable structure",
 }
+PERSONAS["general"] = "; ".join(f"{k}: {v}" for k, v in PERSONAS.items())  # one critic covering all of them, for small diffs
+SMALL_DIFF = 200  # changed lines (added + deleted) below which one combined critic reviews instead of one per persona
+DOC_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
+
+
+def is_doc(path: str) -> bool:
+    return path.lower().endswith(DOC_SUFFIXES) or path.startswith("docs/")
+
+
+def choose_personas(personas: tuple[str, ...], changes: list[tuple[str, int]] | None) -> tuple[tuple[str, ...], str]:
+    """Which critics review a diff. `changes` = [(path, changed lines)] from git, or None when git cannot tell.
+    Returns (personas, why); empty personas = skip critics."""
+    if not changes:
+        return personas, ""  # unknown or empty diff: keep the configured critics
+    if all(is_doc(p) for p, _ in changes):
+        return (), "only documentation changed"
+    lines = sum(n for _, n in changes)
+    if lines < SMALL_DIFF and len(personas) > 1:
+        return ("general",), f"small diff ({lines} changed lines): one combined critic"
+    return personas, ""
 LOCATION = re.compile(r".+:\d+")
 
 
@@ -81,6 +105,16 @@ class Critiques:
 
     def blockers(self, target: str, rnd: int | None = None) -> list[Finding]:
         return self.list(target, rnd, "blocker")
+
+    def majors(self, target: str, rnd: int | None = None) -> list[Finding]:
+        return self.list(target, rnd, "major")
+
+    def close(self, target: str) -> None:
+        """No more critic rounds for this target (its majors went back to the worker; the verifier checks the rest)."""
+        sw = self.b._require()
+        with self.b._conn() as c:
+            c.execute("INSERT INTO critic_rounds (swarm_id,target,n) VALUES (?,?,?) ON CONFLICT(swarm_id,target) DO UPDATE SET n=MAX(n,?)",
+                      (sw.id, target, MAX_CRITIC_ROUNDS, MAX_CRITIC_ROUNDS))
 
 
 def fmt(fs: list[Finding]) -> str:

@@ -159,3 +159,68 @@ def test_task_transitions_are_tagged_for_the_replay_timeline(repo):
 def test_passing_task_is_tagged_done(repo):
     board, r, ex, gate, tasks = setup(repo, [("pass", ["ok"])]); gate.invoke("api", "go")
     assert [x for e in board.list_events(limit=500).items for x in e.refs if x.startswith("task:")] == ["task:api:verifying", "task:api:done"]
+
+
+# ---- required checks: the verifier must run the task's own test command (a real run's verifier ran pytest instead) ----
+
+def test_pass_is_refused_until_required_checks_ran(repo, monkeypatch, capsys):
+    from swarmd.cli import main
+    from swarmd.tasks import record_run
+    board = Board(repo / ".swarm" / "swarm.db"); board.start_swarm("t")
+    r = Runner(board, repo, executor=Scripted(board, []))
+    r.define(WorkerSpec(name="api", goal="g", owns=["src"], tools=["Bash(python3:*)"], checks=["python3 -m unittest discover -s tests"]))
+    v = r.reg.define_verifier(r.reg.get("api"))
+    assert v.checks == ["python3 -m unittest discover -s tests"]
+    tasks = Tasks(board); tasks.request_verification("api"); tasks.set_status("api", "verifying")
+    monkeypatch.setenv("SWARM_HOME", str(repo)); monkeypatch.setenv("SWARM_ROLE", "verifier"); monkeypatch.setenv("SWARM_WORKER", "verify-api")
+    record_run(board, "verify-api", "python3 -m pytest -q")
+    assert main(["verdict", "api", "pass", "--reason", "ok"]) == 2
+    assert "python3 -m unittest discover -s tests" in capsys.readouterr().err and tasks.get("api").status == "verifying"
+    assert main(["verdict", "api", "fail", "--reason", "broken"]) == 0  # failing never needs the checks
+    tasks.request_verification("api"); tasks.set_status("api", "verifying")
+    record_run(board, "verify-api", "cd sub && python3  -m unittest discover -s tests -v")
+    assert main(["verdict", "api", "pass", "--reason", "ok"]) == 0 and tasks.get("api").status == "done"
+
+
+def test_checks_from_an_earlier_round_do_not_count(repo):
+    from swarmd.tasks import record_run
+    board = Board(repo / ".swarm" / "swarm.db"); board.start_swarm("t")
+    tasks = Tasks(board); tasks.ensure("api", "g")
+    record_run(board, "verify-api", "python3 -m pytest")
+    tasks.request_verification("api"); tasks.set_status("api", "verifying")
+    assert tasks.missing_checks("api", ["python3 -m pytest"], "verify-api") == ["python3 -m pytest"]
+
+
+def test_guard_records_verifier_commands_only(repo):
+    from swarmd import guard
+    board = Board(repo / ".swarm" / "swarm.db"); board.start_swarm("t")
+    wt = str(repo)
+    base = {"SWARM_HOME": str(repo), "SWARM_WORKTREE": wt, "SWARM_ALLOW": '["Bash(python3:*)"]'}
+    guard.decide({"tool_name": "Bash", "tool_input": {"command": "python3 -m pytest"}, "cwd": wt}, {**base, "SWARM_WORKER": "verify-api", "SWARM_ROLE": "verifier"})
+    guard.decide({"tool_name": "Bash", "tool_input": {"command": "python3 -m pytest"}, "cwd": wt}, {**base, "SWARM_WORKER": "api", "SWARM_ROLE": "worker"})
+    guard.decide({"tool_name": "Bash", "tool_input": {"command": "rm -rf x"}, "cwd": wt}, {**base, "SWARM_WORKER": "verify-api", "SWARM_ROLE": "verifier"})
+    with board._conn() as c:
+        rows = [(r["worker"], r["command"]) for r in c.execute("SELECT worker, command FROM ran_commands")]
+    assert rows == [("verify-api", "python3 -m pytest")]  # denied commands and other roles are not recorded
+
+
+def test_verifier_brief_lists_required_checks(repo):
+    board = Board(repo / ".swarm" / "swarm.db"); board.start_swarm("t")
+    ex = Scripted(board, [("pass", ["ok"])])
+    r = Runner(board, repo, executor=ex)
+    r.define(WorkerSpec(name="api", goal="g", owns=["src"], tools=["Bash(python3:*)"], checks=["python3 -m unittest"]))
+    Gate(r).invoke("api", "go")
+    prompt = next(c[2] for c in ex.calls if c[0] == "verifier")
+    assert "Required checks" in prompt and "`python3 -m unittest`" in prompt
+
+
+def test_integrator_inherits_every_workers_checks(repo):
+    from swarmd.integrate import Integrator
+    board = Board(repo / ".swarm" / "swarm.db"); board.start_swarm("t")
+    r = Runner(board, repo, executor=Scripted(board, []))
+    r.define(WorkerSpec(name="a", goal="g", owns=["a"], tools=["Bash(python3:*)"], checks=["python3 -m pytest tests/a"]))
+    r.define(WorkerSpec(name="b", goal="g", owns=["b"], tools=["Bash(python3:*)"], checks=["python3 -m pytest tests/b", "python3 -m pytest tests/a"]))
+    r.ensure_worktree(r.reg.get("a"))  # a worker has run, so there is a base to integrate onto
+    integ = Integrator(Gate(r))
+    wt, branch = integ.ensure()
+    assert integ._integrator(wt, branch).checks == ["python3 -m pytest tests/a", "python3 -m pytest tests/b"]

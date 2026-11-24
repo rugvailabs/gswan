@@ -89,3 +89,14 @@ def test_stdio_protocol_roundtrip(tmp_path):
     names, started, post = asyncio.run(asyncio.wait_for(run(), 60))
     assert "invoke_worker" in names
     assert "swm_" in json.dumps(started.model_dump(), default=str) and "seq" in json.dumps(post.model_dump(), default=str)
+
+
+def test_define_worker_checks_must_be_runnable_by_the_verifier(tools):
+    t, _ = tools
+    t.swarm_start("task")
+    r = t.define_worker("api", "g", ["src/api"], checks=["python3 -m pytest tests"])
+    assert r["ok"] is False and "grant it in tools" in r["error"]
+    r = t.define_worker("api", "g", ["src/api"], tools=["Bash(python3 -m pytest:*)"], checks=["python3  -m pytest tests"])
+    assert r["ok"] and r["checks"] == ["python3 -m pytest tests"]
+    assert t.define_worker("ui", "g", ["src/ui"], tools=["Bash(rm:*)"], checks=["rm -rf src"])["ok"]  # granted: allowed, if odd
+    assert t.define_worker("db", "g", ["src/db"], checks=["git status"])["ok"]  # always-allowed reads need no grant
