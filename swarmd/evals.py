@@ -54,6 +54,7 @@ class RunResult:
     cost_usd: float
     wall_s: float
     tokens: int = 0  # input + output (cache reads not counted), coordinator/agent plus every swarm agent
+    score: float = 0.0  # share of hidden test methods that passed (1.0 when passed)
     escalations: int = 0
     blocked: int = 0
     error: str = ""
@@ -71,6 +72,7 @@ class Report:
             rs = [r for r in self.runs if r.mode == m]
             if rs:
                 out[m] = {"runs": len(rs), "passRate": round(sum(r.passed for r in rs) / len(rs), 2),
+                          "meanScore": round(statistics.mean(r.score for r in rs), 3),
                           "meanTokens": int(statistics.mean(r.tokens for r in rs)),
                           "meanCostUsd": round(statistics.mean(r.cost_usd for r in rs), 3),
                           "meanWallS": round(statistics.mean(r.wall_s for r in rs), 1),
@@ -78,12 +80,12 @@ class Report:
         return out
 
     def markdown(self) -> str:
-        rows = ["| mode | runs | pass rate | mean tokens | mean cost | mean wall | escalations | blocked |", "|---|---|---|---|---|---|---|---|"]
+        rows = ["| mode | runs | pass rate | mean score | mean tokens | mean cost | mean wall | escalations | blocked |", "|---|---|---|---|---|---|---|---|---|"]
         for m, s in self.summary().items():
-            rows.append(f"| {m} | {s['runs']} | {s['passRate']:.0%} | {tokens.fmt(s['meanTokens'])} | ${s['meanCostUsd']:.3f} | {s['meanWallS']}s | {s['escalations']} | {s['blocked']} |")
-        det = ["", "| task | mode | pass | tokens | cost | wall | error |", "|---|---|---|---|---|---|---|"]
+            rows.append(f"| {m} | {s['runs']} | {s['passRate']:.0%} | {s['meanScore']:.0%} | {tokens.fmt(s['meanTokens'])} | ${s['meanCostUsd']:.3f} | {s['meanWallS']}s | {s['escalations']} | {s['blocked']} |")
+        det = ["", "| task | mode | pass | score | tokens | cost | wall | error |", "|---|---|---|---|---|---|---|---|"]
         for r in self.runs:
-            det.append(f"| {r.task} | {r.mode} | {'yes' if r.passed else 'NO'} | {tokens.fmt(r.tokens)} | ${r.cost_usd:.3f} | {r.wall_s:.0f}s | {(r.error or r.detail)[:80]} |")
+            det.append(f"| {r.task} | {r.mode} | {'yes' if r.passed else 'NO'} | {r.score:.0%} | {tokens.fmt(r.tokens)} | ${r.cost_usd:.3f} | {r.wall_s:.0f}s | {(r.error or r.detail)[:80]} |")
         return "\n".join(rows + det) + "\n"
 
     def to_json(self) -> str:
@@ -121,20 +123,49 @@ def prepare(task: EvalTask, dest: Path) -> Path:
     return dest
 
 
-def check(task: EvalTask, repo: Path) -> tuple[bool, str]:
-    """Copy the hidden tests in only now and run them with stdlib unittest (no dependencies)."""
+# Runs the hidden tests and prints {"ran", "failed", "last"}: failed counts test METHODS (a failing subTest fails its
+# method once), so ran - failed is the number of passing tests and the score is a fair pass share.
+CHECK_SCRIPT = r"""
+import json, sys, unittest
+class R(unittest.TextTestResult):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k); self.bad = set()
+    def addFailure(self, t, e): super().addFailure(t, e); self.bad.add(t.id())
+    def addError(self, t, e): super().addError(t, e); self.bad.add(t.id())
+    def addSubTest(self, t, st, e):
+        super().addSubTest(t, st, e)
+        if e is not None: self.bad.add(t.id())
+    def addUnexpectedSuccess(self, t): super().addUnexpectedSuccess(t); self.bad.add(t.id())
+suite = unittest.defaultTestLoader.discover(sys.argv[1], pattern="test_*.py")
+r = unittest.TextTestRunner(resultclass=R, verbosity=0, stream=sys.stderr).run(suite)
+last = (r.errors + r.failures)[-1][1].strip().splitlines()[-1] if (r.errors or r.failures) else ""
+print(json.dumps({"ran": r.testsRun, "failed": len(r.bad), "last": last[:300]}))
+"""
+
+
+def check(task: EvalTask, repo: Path) -> tuple[bool, str, float]:
+    """Copy the hidden tests in only now and run them with stdlib unittest (no dependencies).
+    Returns (all passed, detail, score = share of hidden test methods that passed)."""
     chk = repo / "_eval_check"
     shutil.copytree(task.dir / "check", chk, dirs_exist_ok=True)
     try:
-        p = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(chk), "-p", "test_*.py"],
+        p = subprocess.run([sys.executable, "-c", CHECK_SCRIPT, str(chk)],
                            cwd=repo, env=dict(os.environ, PYTHONPATH=str(repo), PYTHONDONTWRITEBYTECODE="1"),
                            capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
-        return False, "hidden check timed out"
+        return False, "hidden check timed out", 0.0
     finally:
         shutil.rmtree(chk, ignore_errors=True)
-    tail = (p.stderr or p.stdout).strip().splitlines()
-    return p.returncode == 0, (tail[-1] if tail else "")
+    try:
+        res = json.loads(p.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        tail = (p.stderr or p.stdout).strip().splitlines()
+        return False, (tail[-1] if tail else "hidden check crashed"), 0.0
+    ran, failed = res["ran"], res["failed"]
+    score = round((ran - failed) / ran, 3) if ran else 0.0
+    ok = ran > 0 and failed == 0 and p.returncode == 0
+    detail = "OK" if ok else f"{ran - failed}/{ran} hidden tests passed" + (f"; last: {res['last']}" if res["last"] else "")
+    return ok, detail, score
 
 
 def single_command(task: EvalTask, claude: str, model: str, budget: float) -> list[str]:
@@ -195,8 +226,8 @@ def run_one(task: EvalTask, mode: str, workdir: Path, *, executor: Executor = su
                 err = err or f"integration not applied: {ap.get('error')}"
         except Exception as e:  # a broken swarm db is a failed run, not a crashed eval
             err = err or f"could not read swarm state: {e}"
-    ok, detail = check(task, repo)
-    return RunResult(task.id, mode, ok, round(cost, 4), round(time.monotonic() - t0, 1), used, escalations, blocked, err, detail, str(repo))
+    ok, detail, score = check(task, repo)
+    return RunResult(task.id, mode, ok, round(cost, 4), round(time.monotonic() - t0, 1), used, score, escalations, blocked, err, detail, str(repo))
 
 
 def run_eval(root: Path, tasks: list[EvalTask], modes: list[str], repeat: int, workdir: Path | None = None, **kw) -> Report:

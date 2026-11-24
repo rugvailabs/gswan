@@ -1,3 +1,4 @@
+import sys
 import json
 import shutil
 import subprocess
@@ -22,19 +23,20 @@ def copy_reference(task, repo):
 
 
 def test_tasks_are_discovered_and_well_formed():
-    assert set(TASKS) >= {"textkit", "inventory-bugs", "ledger"}
+    assert set(TASKS) >= {"textkit", "inventory-bugs", "ledger", "minidb", "orders-bugs"}
     for t in TASKS.values():
         assert t.prompt and (t.dir / "check").is_dir() and (t.dir / "reference").is_dir()
 
 
-@pytest.mark.parametrize("tid", ["textkit", "inventory-bugs", "ledger"])
+@pytest.mark.parametrize("tid", ["textkit", "inventory-bugs", "ledger", "minidb", "orders-bugs"])
 def test_hidden_check_accepts_reference_and_rejects_the_starting_repo(tid, tmp_path):
     t = TASKS[tid]
     start = evals.prepare(t, tmp_path / "start")
-    assert evals.check(t, start)[0] is False
+    ok0, _, score0 = evals.check(t, start)
+    assert ok0 is False and score0 < 1
     assert not (start / "_eval_check").exists()  # hidden tests never linger where an agent could read them
     ok = evals.prepare(t, tmp_path / "ok"); copy_reference(t, ok)
-    assert evals.check(t, ok)[0] is True
+    assert evals.check(t, ok)[0:3:2] == (True, 1.0)
 
 
 def test_check_is_not_visible_in_the_agents_repo(tmp_path):
@@ -105,9 +107,9 @@ def test_report_summary_and_markdown():
     rep = evals.Report([evals.RunResult("t", "single", True, 0.4, 10), evals.RunResult("t", "single", False, 0.6, 20),
                         evals.RunResult("t", "swarm", True, 2.0, 60, escalations=1)])
     s = rep.summary()
-    assert s["single"] == {"runs": 2, "passRate": 0.5, "meanTokens": 0, "meanCostUsd": 0.5, "meanWallS": 15.0, "escalations": 0, "blocked": 0}
+    assert s["single"] == {"runs": 2, "passRate": 0.5, "meanScore": 0.0, "meanTokens": 0, "meanCostUsd": 0.5, "meanWallS": 15.0, "escalations": 0, "blocked": 0}
     assert s["swarm"]["escalations"] == 1
-    assert "| single | 2 | 50% | 0 | $0.500 |" in rep.markdown() and json.loads(rep.to_json())["runs"][2]["mode"] == "swarm"
+    assert "| single | 2 | 50% | 0% | 0 | $0.500 |" in rep.markdown() and json.loads(rep.to_json())["runs"][2]["mode"] == "swarm"
 
 
 def test_cli_eval_is_a_dry_run_without_yes(capsys, tmp_path, monkeypatch):
@@ -135,3 +137,17 @@ def test_worst_case_uses_the_measured_token_rate():
     ts = [TASKS["textkit"], TASKS["ledger"], TASKS["inventory-bugs"]]
     n, worst = evals.worst_case(ts, ["single", "swarm", "swarm+all"], 2, 3.0, 1_500_000)
     assert n == 18 and worst == 3 * 2 * (3.0 + 2 * (3.0 + 9.0))
+
+
+def test_score_is_the_share_of_passing_test_methods(tmp_path):
+    t = TASKS["orders-bugs"]
+    ok, detail, score = evals.check(t, evals.prepare(t, tmp_path / "start"))  # 8 seeded bugs, a few tests unaffected
+    assert not ok and 0 < score < 0.5 and "hidden tests passed" in detail
+    ok, detail, score = evals.check(TASKS["minidb"], evals.prepare(TASKS["minidb"], tmp_path / "empty"))
+    assert (ok, score) == (False, 0.0)  # nothing built: every test fails on its own import, not one module-level error
+
+
+def test_orders_bugs_visible_tests_pass_on_the_buggy_start(tmp_path):
+    repo = evals.prepare(TASKS["orders-bugs"], tmp_path / "r")
+    p = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=repo, capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr

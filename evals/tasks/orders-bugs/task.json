@@ -1,0 +1,7 @@
+{
+  "id": "orders-bugs",
+  "prompt": "This repo is an order-processing package (`shop/`, nine modules) and README.md is its specification. Customers report wrong totals, wrong stock levels and odd invoices. Find and fix EVERY place where the code in shop/ disagrees with README.md (there are several, spread over different modules), and add a regression test for each fix in tests/ (run with `python3 -m unittest discover -s tests`). Keep the existing tests passing and do not rename or change the signature of any public function or class.",
+  "tools": ["Bash(python3:*)"],
+  "check": "unittest",
+  "timeout_s": 1800
+}
