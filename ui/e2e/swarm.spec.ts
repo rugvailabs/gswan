@@ -64,6 +64,23 @@ test("a worker's committed changes show in the diff panel", async ({ page }) => 
   await expect(panel).toHaveCount(0);
 });
 
+test("replay steps back through the run and plays forward again", async ({ page }) => {
+  await page.goto("/?token=e2e-token");
+  const board = page.getByRole("region", { name: "board" });
+  await expect(board.getByText("need the api shape first")).toBeVisible();
+  await board.getByRole("tab", { name: "Replay" }).click();
+  const pos = board.getByLabel("replay position");
+  const total = Number((await pos.innerText()).match(/of (\d+)/)![1]);
+  await expect(pos).toContainText(`Event ${total} of ${total}`);
+  await board.getByRole("button", { name: "First" }).click();
+  await expect(pos).toContainText(`Event 1 of ${total}`);
+  await expect(board.getByRole("list", { name: "replay events" }).getByRole("listitem")).toHaveCount(1);
+  await board.getByLabel("speed").selectOption("16");
+  await board.getByRole("button", { name: "Play", exact: true }).click();
+  await expect(pos).toContainText(`Event ${total} of ${total}`, { timeout: 15_000 });
+  await expect(board.getByRole("button", { name: "Play from start" })).toBeVisible();
+});
+
 test("a wrong token shows an error instead of data", async ({ page }) => {
   await page.goto("/?token=nope");
   await expect(page.getByRole("alert")).toContainText(/token/i);

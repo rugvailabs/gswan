@@ -49,7 +49,7 @@ class Gate:
                 if blockers:  # the worker fixes them first; no verifier round is spent
                     self.tasks.set_status(name, "failed")
                     self.board.post(EventIn(agent="swarmd", kind="update",
-                                            body=f"{len(blockers)} critic blocker(s) on {name} (round {self.crit.rounds(name)}); sent back to the worker"))
+                                            body=f"{len(blockers)} critic blocker(s) on {name} (round {self.crit.rounds(name)}); sent back to the worker", refs=[f"task:{name}:failed"]))
                     fix = self.runner.invoke(name, self.critic_fix_message(blockers), sender="critics")
                     if not fix.ok or fix.queued_only:
                         return
@@ -57,7 +57,7 @@ class Gate:
             v = self.runner.reg.define_verifier(self.runner.reg.get(name), self.verifier_model)
             if not v.cwd:  # worktree path becomes known after the worker's first turn
                 self.runner.reg.set_cwd(v, target.worktree)
-            self.board.post(EventIn(agent="swarmd", kind="update", body=f"verifying {name} (round {t.rounds + 1})"))
+            self.board.post(EventIn(agent="swarmd", kind="update", body=f"verifying {name} (round {t.rounds + 1})", refs=[f"task:{name}:verifying"]))
             res = self.runner.invoke(v.name, self.brief(target, t), sender="swarmd")
             t = self.tasks.get(name)
             if t.status == "verifying":  # verifier ended its turn without a verdict
@@ -66,7 +66,7 @@ class Gate:
                 if no_verdict >= MAX_NO_VERDICT or not res.ok:
                     self.tasks.set_status(name, "escalated")
                     self.board.post(EventIn(agent="swarmd", kind="blocked",
-                                            body=f"verifier for {name} gave no verdict ({res.text[:200]}); needs a human"))
+                                            body=f"verifier for {name} gave no verdict ({res.text[:200]}); needs a human", refs=[f"task:{name}:escalated"]))
                     return
                 continue
             if t.status == "done":
@@ -75,7 +75,7 @@ class Gate:
                 if t.rounds >= MAX_ROUNDS:
                     self.tasks.set_status(name, "escalated")
                     self.board.post(EventIn(agent="swarmd", kind="blocked",
-                                            body=f"{name} failed verification {t.rounds} times; needs a human. Last reasons: " + " | ".join(t.reasons)))
+                                            body=f"{name} failed verification {t.rounds} times; needs a human. Last reasons: " + " | ".join(t.reasons), refs=[f"task:{name}:escalated"]))
                     return
                 fix = self.runner.invoke(name, self.fix_message(t), sender=f"verify-{name}")
                 if not fix.ok or fix.queued_only:

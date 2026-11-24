@@ -68,12 +68,12 @@ class Tasks:
         if passed:
             with self.b._conn() as c:
                 c.execute("UPDATE tasks SET status='done', reasons='[]', updated_at=? WHERE swarm_id=? AND worker=?", (utc_now(), sw.id, worker))
-            self.b.post(EventIn(agent=who, kind="verify", body=f"pass {worker}: " + ("; ".join(reasons) or "verified")))
+            self.b.post(EventIn(agent=who, kind="verify", body=f"pass {worker}: " + ("; ".join(reasons) or "verified"), refs=[f"task:{worker}:done"]))
         else:
             with self.b._conn() as c:
                 c.execute("UPDATE tasks SET status='failed', rounds=rounds+1, reasons=?, updated_at=? WHERE swarm_id=? AND worker=?",
                           (json.dumps(reasons), utc_now(), sw.id, worker))
-            self.b.post(EventIn(agent=who, kind="verify", body=f"fail {worker}: " + " | ".join(f"{i}. {r}" for i, r in enumerate(reasons, 1))))
+            self.b.post(EventIn(agent=who, kind="verify", body=f"fail {worker}: " + " | ".join(f"{i}. {r}" for i, r in enumerate(reasons, 1)), refs=[f"task:{worker}:failed"]))
         return self.get(worker)
 
     def unsettled(self) -> list[Task]:

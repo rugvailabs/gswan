@@ -13,11 +13,11 @@ interface State {
   kinds: ReadonlySet<EventKind>;
   agent: string | null;
   mentionTarget: string | null;
-  view: "board" | "threads";
+  view: "board" | "threads" | "replay";
   threadAgent: string | null;
   diffWorker: string | null;
   openDiff: (w: string | null) => void;
-  setView: (v: "board" | "threads") => void;
+  setView: (v: "board" | "threads" | "replay") => void;
   openThread: (a: string) => void;
   addWorker: (w: WorkerDraft) => Promise<void>;
   setLimits: (l: LimitsDraft) => Promise<void>;

@@ -65,7 +65,7 @@ beforeEach(() => {
     if (url === "/events") return json(ev(9, "human", "human", JSON.parse(String(init?.body)).body), 201);
     return json({ message: "nope" }, 404);
   }));
-  useStore.setState({ token: "tok", swarm: null, status: null, events: [], live: false, error: null, kinds: new Set(), agent: null, mentionTarget: null, diffWorker: null });
+  useStore.setState({ token: "tok", swarm: null, status: null, events: [], live: false, error: null, kinds: new Set(), agent: null, mentionTarget: null, diffWorker: null, view: "board" });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -176,6 +176,36 @@ describe("App", () => {
     expect(within(panel).getByText("outside owned paths")).toBeInTheDocument();
     await user.click(within(panel).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("region", { name: "diff api" })).not.toBeInTheDocument();
+  });
+
+  it("replays the run: stepping back shows the swarm as it stood at that event", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("taking api");
+    useStore.getState().addEvents([
+      ev(3, "api", "done", "built the endpoint"),
+      { ...ev(4, "verify-api", "verify", "pass api: tests green"), refs: ["task:api:done"] },
+    ]);
+    await user.click(screen.getByRole("tab", { name: "Replay" }));
+    const pos = screen.getByLabelText("replay position");
+    const state = screen.getByRole("list", { name: "state at this moment" });
+    const list = screen.getByRole("list", { name: "replay events" });
+    expect(pos).toHaveTextContent("Event 4 of 4");
+    expect(pos).toHaveTextContent("1/1 tasks done"); // ui has not appeared on the board yet
+    expect(within(state).getByText("api").closest("li")).toHaveTextContent(/^api\s*done/);
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(pos).toHaveTextContent("Event 3 of 4");
+    expect(pos).toHaveTextContent("0/1 tasks done");
+    expect(within(state).getByText("awaiting verification")).toBeInTheDocument();
+    expect(within(list).queryByText("pass api: tests green")).not.toBeInTheDocument();
+    expect(within(list).getByText("built the endpoint").closest("li")).toHaveAttribute("aria-current", "step");
+    await user.click(screen.getByRole("button", { name: "First" }));
+    expect(pos).toHaveTextContent("Event 1 of 4");
+    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /Key moment ▶/ }));
+    expect(pos).toHaveTextContent("Event 3 of 4");
+    await user.click(screen.getByRole("button", { name: "Latest" }));
+    expect(screen.getByRole("button", { name: "Play from start" })).toBeInTheDocument();
   });
 
   it("shows an error when a diff cannot be loaded", async () => {

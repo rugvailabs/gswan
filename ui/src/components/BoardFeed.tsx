@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { clock, eventTone, filterEvents, isReply, mentionTarget, speaker } from "../lib";
-import { EventBody } from "./EventBody";
+import { filterEvents } from "../lib";
+import { EventRow } from "./EventRow";
+import { Replay } from "./Replay";
 import { Threads } from "./Threads";
 import { useStore } from "../store";
 import { EVENT_KINDS } from "../types";
@@ -25,13 +26,13 @@ export function BoardFeed() {
   return (
     <section aria-label="board" className="flex min-h-[24rem] flex-col rounded-lg border" style={{ backgroundColor: "var(--panel)", borderColor: "var(--line)" }}>
       <div role="tablist" aria-label="view" className="flex gap-1 border-b p-2 text-sm" style={{ borderColor: "var(--line)" }}>
-        {(["board", "threads"] as const).map((v) => (
+        {(["board", "threads", "replay"] as const).map((v) => (
           <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} className="rounded px-3 py-1" style={{ backgroundColor: view === v ? "var(--line)" : "transparent" }}>
-            {v === "board" ? "Board (everything)" : "Conversations (per agent)"}
+            {v === "board" ? "Board (everything)" : v === "threads" ? "Conversations (per agent)" : "Replay"}
           </button>
         ))}
       </div>
-      {view === "threads" ? <Threads /> : <>
+      {view === "threads" ? <Threads /> : view === "replay" ? <Replay /> : <>
       <div className="flex flex-wrap items-center gap-2 border-b p-3 text-xs" style={{ borderColor: "var(--line)" }}>
         {EVENT_KINDS.map((k) => (
           <button key={k} aria-pressed={kinds.has(k)} onClick={() => toggleKind(k)} className="rounded-full border px-2 py-0.5"
@@ -45,16 +46,7 @@ export function BoardFeed() {
       </div>
       <ol className="flex-1 overflow-y-auto p-3 text-sm" style={{ maxHeight: "70vh" }}>
         {shown.length === 0 && <li className="tone-muted">No events{events.length ? " match the filters" : " yet"}.</li>}
-        {shown.map((e) => (
-          <li key={e.seq} className="grid grid-cols-[4.5rem_9rem_4.5rem_1fr] items-baseline gap-2 border-b py-1.5 last:border-0" style={{ borderColor: "var(--line)" }}>
-            <span className="mono text-xs tone-muted">{clock(e.ts)}</span>
-            <span className="mono truncate font-medium" title={`${speaker(e)}${mentionTarget(e) ? " → " + mentionTarget(e) : ""}`}>
-              {speaker(e)}{mentionTarget(e) && <span className="tone-muted"> → {mentionTarget(e)}</span>}
-            </span>
-            <span className={`text-xs font-semibold uppercase tone-${eventTone(e)}`}>{isReply(e) ? "reply" : e.kind}</span>
-            <EventBody body={e.body} />
-          </li>
-        ))}
+        {shown.map((e) => <EventRow key={e.seq} e={e} />)}
         <div ref={endRef} />
       </ol>
       </>}

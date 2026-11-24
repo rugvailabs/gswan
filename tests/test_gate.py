@@ -148,3 +148,14 @@ def test_stop_hook_allows_when_done_or_no_swarm(repo, tmp_path):
     decisions.record(board, "split", "one worker: the task only touches src/api")
     assert decide(repo, {}) is None
     assert decide(tmp_path, {}) is None  # no db at all
+
+
+def test_task_transitions_are_tagged_for_the_replay_timeline(repo):
+    board, r, ex, gate, tasks = setup(repo, [("fail", ["a"]), ("fail", ["b"])]); gate.invoke("api", "go")
+    refs = [x for e in board.list_events(limit=500).items for x in e.refs if x.startswith("task:")]
+    assert refs == ["task:api:verifying", "task:api:failed", "task:api:verifying", "task:api:failed", "task:api:escalated"]
+
+
+def test_passing_task_is_tagged_done(repo):
+    board, r, ex, gate, tasks = setup(repo, [("pass", ["ok"])]); gate.invoke("api", "go")
+    assert [x for e in board.list_events(limit=500).items for x in e.refs if x.startswith("task:")] == ["task:api:verifying", "task:api:done"]

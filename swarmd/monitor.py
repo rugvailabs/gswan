@@ -201,12 +201,12 @@ class Monitor:
             th.start(); self._threads.append(th); started.append(name)
         return started
 
-    def _post(self, kind: str, body: str) -> None:
-        self.board.post(EventIn(agent="monitor", kind=kind, body=body[:2000]))
+    def _post(self, kind: str, body: str, refs: list[str] | None = None) -> None:
+        self.board.post(EventIn(agent="monitor", kind=kind, body=body[:2000], refs=refs or []))
 
     def _escalate(self, w: Worker, f: Finding) -> None:
         self.tasks.set_status(w.name, "escalated")
-        self._post("blocked", f"{w.name} {f.state} and the monitor ladder is exhausted: {f.detail}. Needs a human.")
+        self._post("blocked", f"{w.name} {f.state} and the monitor ladder is exhausted: {f.detail}. Needs a human.", [f"task:{w.name}:escalated"])
 
     def _restart(self, w: Worker, f: Finding) -> None:
         self._post("nudge", f"restarting {w.name} ({f.state}: {f.detail})")

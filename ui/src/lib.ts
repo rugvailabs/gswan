@@ -1,4 +1,4 @@
-import type { BoardEvent, EventKind } from "./types";
+import type { BoardEvent, EventKind, TaskStatus } from "./types";
 
 /** Merge incoming events into an existing list: dedupe by seq, keep ascending order. */
 export function mergeEvents(existing: BoardEvent[], incoming: BoardEvent[]): BoardEvent[] {
@@ -130,4 +130,94 @@ export function findingTarget(location: string): { path: string; line: number | 
 export function findingMatchesFile(location: string, filePath: string): boolean {
   const { path } = findingTarget(location);
   return path !== "" && (filePath === path || filePath.endsWith("/" + path));
+}
+
+export interface ReplayAgent {
+  name: string;
+  task: TaskStatus | null; // null for agents without a task (coordinator, verifiers, critics, researchers)
+  last: BoardEvent;
+  events: number;
+  costUsd: number; // from the cost reported with each turn reply
+  turns: number;
+}
+export interface ReplayState {
+  at: BoardEvent | null;
+  elapsedS: number;
+  agents: ReplayAgent[];
+  costUsd: number;
+  tasks: number;
+  tasksDone: number;
+}
+
+const TASK_STATES: readonly string[] = ["open", "awaiting_verification", "verifying", "failed", "done", "escalated"];
+const NOT_ACTORS: ReadonlySet<string> = new Set(["swarmd", "monitor", "human"]);
+export const KEY_KINDS: ReadonlySet<EventKind> = new Set<EventKind>(["blocked", "done", "verify", "nudge", "decision"]);
+
+/** Task changes an event carries. swarmd tags them (`task:<worker>:<status>`); older verify events are read from their body. */
+function taskChanges(e: BoardEvent): [string, TaskStatus][] {
+  const out: [string, TaskStatus][] = [];
+  for (const r of e.refs) {
+    const m = /^task:(.+):([a-z_]+)$/.exec(r);
+    if (m && TASK_STATES.includes(m[2]!)) out.push([m[1]!, m[2] as TaskStatus]);
+  }
+  if (out.length === 0 && e.kind === "verify") {
+    const m = /^(pass|fail) ([A-Za-z0-9_.-]+):/.exec(e.body);
+    if (m) out.push([m[2]!, m[1] === "pass" ? "done" : "failed"]);
+  }
+  if (e.kind === "done") out.push([e.agent, "awaiting_verification"]); // a worker's `done` is provisional
+  return out;
+}
+
+/**
+ * The swarm as it stood right after `events[index]`, rebuilt from the board alone.
+ * `taskWorkers` are the agents that own a task (so they start as `open`); the rest never show a task.
+ */
+export function replayState(events: BoardEvent[], index: number, taskWorkers: readonly string[] = []): ReplayState {
+  const upTo = events.slice(0, Math.max(0, Math.min(index, events.length - 1)) + 1);
+  const owners = new Set(taskWorkers);
+  const agents = new Map<string, ReplayAgent>();
+  const touch = (name: string, e: BoardEvent): ReplayAgent | null => {
+    if (NOT_ACTORS.has(name)) return null;
+    let a = agents.get(name);
+    if (!a) {
+      a = { name, task: owners.has(name) ? "open" : null, last: e, events: 0, costUsd: 0, turns: 0 };
+      agents.set(name, a);
+    }
+    return a;
+  };
+  let costUsd = 0;
+  for (const e of upTo) {
+    const who = touch(speaker(e), e);
+    if (who) { who.last = e; who.events += 1; }
+    const target = mentionTarget(e);
+    if (target) touch(target, e);
+    const cost = Number(e.refs.find((r) => r.startsWith("cost:"))?.slice(5) ?? 0) || 0;
+    const turn = Number(e.refs.find((r) => r.startsWith("turn:"))?.slice(5) ?? 0) || 0;
+    costUsd += cost;
+    if (who) { who.costUsd += cost; who.turns = Math.max(who.turns, turn); }
+    for (const [name, status] of taskChanges(e)) {
+      const a = agents.get(name) ?? (owners.has(name) ? touch(name, e) : null);
+      if (a && (a.task !== null || owners.has(name) || e.kind !== "done")) a.task = status;
+    }
+  }
+  const at = upTo.at(-1) ?? null;
+  const list = [...agents.values()].sort((a, b) => Number(b.task !== null) - Number(a.task !== null) || a.name.localeCompare(b.name));
+  const withTask = list.filter((a) => a.task !== null);
+  return {
+    at, agents: list, costUsd,
+    elapsedS: at && events[0] ? Math.max(0, Math.round((Date.parse(at.ts) - Date.parse(events[0].ts)) / 1000)) : 0,
+    tasks: withTask.length, tasksDone: withTask.filter((a) => a.task === "done").length,
+  };
+}
+
+/** Index of the nearest key moment (blocked, done, verdict, nudge, decision) before or after `index`; -1 if none. */
+export function nextKeyMoment(events: BoardEvent[], index: number, dir: 1 | -1): number {
+  for (let i = index + dir; i >= 0 && i < events.length; i += dir) if (KEY_KINDS.has(events[i]!.kind)) return i;
+  return -1;
+}
+
+export function duration(s: number): string {
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
