@@ -56,7 +56,8 @@ def decide_bash(payload: dict, env: dict[str, str]) -> dict:
             pass
     try:
         bashpolicy.check(cmd, role=role, worktree=wt, cwd=payload.get("cwd") or wt, grants=grants,
-                         cli_python=env.get("SWARM_PYTHON"), branch_prefix=env.get("SWARM_BRANCH_PREFIX"))
+                         cli_python=env.get("SWARM_PYTHON"), branch_prefix=env.get("SWARM_BRANCH_PREFIX"),
+                         owns=[o for o in env.get("SWARM_OWNS", "").split(os.pathsep) if o])
     except bashpolicy.Denied as e:
         _log_denial(env, cmd, str(e))
         ask = ""

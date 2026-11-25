@@ -180,8 +180,15 @@ def cmd_eval(a, root: Path) -> int:
     if not a.yes:
         print("dry run: nothing executed. Re-run with --yes to spend that money.")
         return 0
-    rep = evals.run_eval(base, tasks, modes, a.repeat, claude=os.environ.get("SWARM_CLAUDE_BIN", "claude"), model=a.model, max_cost=a.max_cost,
-                         max_tokens=a.max_tokens)
+    awake, warn = evals.stay_awake()
+    if warn:
+        print(warn, file=sys.stderr)
+    try:
+        rep = evals.run_eval(base, tasks, modes, a.repeat, claude=os.environ.get("SWARM_CLAUDE_BIN", "claude"), model=a.model, max_cost=a.max_cost,
+                             max_tokens=a.max_tokens)
+    finally:
+        if awake:
+            awake.terminate()
     out = base / "results"; out.mkdir(exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     (out / f"{stamp}.json").write_text(rep.to_json()); (out / f"{stamp}.md").write_text(rep.markdown())

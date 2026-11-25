@@ -217,7 +217,7 @@ class Expressions(unittest.TestCase):
         self.assertEqual(q(mk(), "SELECT 2 IN (1, 2), 3 IN (1, 2), 3 IN (1, NULL), 1 IN (1, NULL), NULL IN (1), 3 NOT IN (1, 2), "
                                  "3 NOT IN (1, NULL)"), [(1, 0, None, 1, None, 1, None)])
         self.assertEqual(q(mk(), "SELECT 2 BETWEEN 1 AND 3, 5 BETWEEN 1 AND 3, 5 NOT BETWEEN 1 AND 3, NULL BETWEEN 1 AND 2, "
-                                 "5 BETWEEN NULL AND 3, 1.5 BETWEEN 1 AND 2"), [(1, 0, 1, None, 0, 1)])
+                                 "5 BETWEEN NULL AND 3, 1.5 BETWEEN 1 AND 2"), [(1, 0, 1, None, None, 1)])
         self.assertEqual(q(mk(), "SELECT id FROM emp WHERE age BETWEEN 30 AND 50 AND dept IN ('eng', 'ops')"), [(1,), (2,)])
 
     def test_like(self):

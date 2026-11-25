@@ -169,16 +169,10 @@ def ev(e, env: Env):
         return r if r is None or not e.negated else 1 - r
     if isinstance(e, N.Between):
         v, lo, hi = ev(e.e, env), ev(e.lo, env), ev(e.hi, env)
-        a, b = compare(v, lo), compare(v, hi)
-        ta = None if a is None else a >= 0
-        tb = None if b is None else b <= 0
-        if ta is False or tb is False:
-            r = 0
-        elif ta is None or tb is None:
-            r = None
-        else:
-            r = 1
-        return r if r is None or not e.negated else 1 - r
+        if v is None or lo is None or hi is None:  # SPEC: any NULL operand of BETWEEN gives NULL
+            return None
+        r = int(compare(v, lo) >= 0 and compare(v, hi) <= 0)
+        return 1 - r if e.negated else r
     if isinstance(e, N.Like):
         v, p = ev(e.e, env), ev(e.pat, env)
         if v is None or p is None:

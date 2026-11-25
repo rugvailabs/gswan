@@ -39,6 +39,12 @@ class Exec:
 Executor = Callable[[list[str], Path, dict[str, str], float], Exec]
 
 
+SLEPT = "went to sleep"  # Claude Code's API error when the machine slept mid-response
+MAX_SLEEP_RETRIES = 2
+SLEEP_RESUME = ("Your previous turn was cut off because the computer went to sleep. Your session and worktree are intact. "
+                "Run `git status`, then continue exactly where you left off.")
+
+
 def subprocess_executor(cmd: list[str], cwd: Path, env: dict[str, str], timeout: float) -> Exec:
     try:
         p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
@@ -398,7 +404,7 @@ class Runner:
             w = self.reg.get(name)
             if not self.reg.queue_len(w) or not self.reg.try_claim(w):
                 return last
-            had_error = False
+            had_error, sleep_retries = False, 0
             try:
                 wt = self.ensure_worktree(w)
                 while True:
@@ -414,6 +420,12 @@ class Runner:
                     spent = {k: tv[k] + (last.tokens.get(k, 0) if last else 0) for k in tv}
                     last = TurnResult(worker=name, ok=ok, text=text or err, session_id=w.session_id, cost_usd=cost, tokens=spent,
                                       denials=denials, turns_run=(last.turns_run if last else 0) + 1)
+                    if not ok and SLEPT in err and sleep_retries < MAX_SLEEP_RETRIES:
+                        sleep_retries += 1  # the API call died because the laptop slept: resume the same session
+                        self.board.post(EventIn(agent="swarmd", kind="update",
+                                                body=f"{name}'s turn was cut off because the computer slept; resuming it ({sleep_retries}/{MAX_SLEEP_RETRIES})"))
+                        self.reg.enqueue(w, "swarmd", SLEEP_RESUME)
+                        continue
                     if not ok:
                         had_error = True
                         killed = "terminated by signal" in err or self.reg.get(name).activity_note == "terminated by monitor"

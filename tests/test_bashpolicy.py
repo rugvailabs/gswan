@@ -15,8 +15,9 @@ def wt(tmp_path):
     return str(root)
 
 
-def run(cmd, wt, role="worker", grants=("Bash(python3:*)",), cwd=None, prefix="swarm/swm_1/"):
-    bp.check(cmd, role=role, worktree=wt, cwd=cwd, grants=list(grants), cli_python=PY, branch_prefix=prefix)
+def run(cmd, wt, role="worker", grants=("Bash(python3:*)",), cwd=None, prefix="swarm/swm_1/", owns=None):
+    bp.check(cmd, role=role, worktree=wt, cwd=cwd, grants=list(grants), cli_python=PY, branch_prefix=prefix,
+             owns=[os.path.join(wt, o) for o in owns] if owns is not None else None)
 
 
 def ok(cmd, wt, **kw):
@@ -287,3 +288,66 @@ def test_hook_denies_writes_inside_a_git_dir(wt):
     out = guard.decide({"tool_name": "Write", "tool_input": {"file_path": os.path.join(wt, "src", "x", ".git", "config")}}, env)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny" and ".git" in out["hookSpecificOutput"]["permissionDecisionReason"]
     assert guard.decide({"tool_name": "Write", "tool_input": {"file_path": os.path.join(wt, "src", "x", ".gitignore")}}, env) is None
+
+
+
+# ---- loops, owned sed -i, git restore (found by the orders-bugs eval) ----------------------------------------------
+@pytest.mark.parametrize("cmd", [
+    'for f in src/*.py; do echo "=== $f"; cat -n $f; done',
+    "for f in src/a.py src/b.py\ndo\n  wc -l $f\ndone",
+    "for t in tests.test_a tests.test_b; do python3 -m unittest ${t} 2>&1 | tail -1; done; git status",
+])
+def test_for_loops_allowed(cmd, wt):
+    ok(cmd, wt)
+
+
+@pytest.mark.parametrize("cmd,match", [
+    ("for f in ../*; do touch $f; done", "outside your worktree"),
+    ("for f in src/*; do rm $f; done", "not allowed"),
+    ("for f in a; do for g in b; do echo $g; done; done", "nested"),
+    ("for f in src; do cd $f; done", "cd is not allowed"),
+    ("for f in $HOME; do cat $f; done", "may not contain"),
+    ("for f in a b; do echo $f", "without"),
+    ("for f in a; do $f; done", "not allowed"),
+    ("do echo hi; done", "outside a for loop"),
+])
+def test_for_loops_denied(cmd, match, wt):
+    bad(cmd, wt, match=match)
+
+
+def test_sed_in_place_only_on_owned_files_and_only_substitutions(wt):
+    ok("sed -i 's/ROUND_HALF_EVEN/ROUND_HALF_UP/g' src/a.py", wt, owns=["src"])
+    ok("sed -i '' -e 's|a/b|c|' -e 's/x/y/2' src/sub/b.py", wt, owns=["src"])
+    ok("sed -E -i 's/(a+)b/\\1/I; s/q/r/' src/a.py", wt, owns=["src/a.py"])
+    for cmd, match in [("sed -i 's/a/b/' README.md", "do not own"), ("sed -i 's/a/b/w /tmp/x' src/a.py", "substitutions"),
+                       ("sed -i 's/a/b/e' src/a.py", "substitutions"), ("sed -i '1d' src/a.py", "substitutions"),
+                       ("sed -i.bak 's/a/b/' src/a.py", "backup"), ("sed -i 's/a/b/' ../wt2/src/a.py", "do not own"),
+                       ("sed -i 's/a/b/' $F", "variable"), ("sed -i 's/a/b/'", "needs the files")]:
+        bad(cmd, wt, match=match, owns=["src"])
+    bad("sed -i 's/a/b/' src/a.py", wt, role="verifier", owns=["src"], match="read-only")
+
+
+def test_git_restore_and_checkout_paths_on_owned_files(wt):
+    ok("git restore --source abc123 -- src/a.py", wt, owns=["src"])
+    ok("git restore -s HEAD~1 src/sub", wt, owns=["src"])
+    ok("git restore --source=HEAD --staged --worktree src/a.py", wt, owns=["src"])
+    ok("git checkout abc123 -- src/a.py src/sub", wt, owns=["src"])
+    for cmd, match in [("git restore README.md", "do not own"), ("git checkout main", "switching branches"),
+                       ("git checkout -b x -- src/a.py", "switching branches"), ("git restore --source=-x src/a.py", "plain revision"),
+                       ("git restore --source HEAD", "needs the files"), ("git restore -p src/a.py", "not allowed"),
+                       ("git checkout HEAD -- src/.git/config", ".git")]:
+        bad(cmd, wt, match=match, owns=["src"])
+    bad("git restore src/a.py", wt, role="critic", owns=["src"], match="read-only")
+
+
+def test_git_stash_is_denied_with_an_alternative(wt):
+    bad("git stash push -m x -- src", wt, match="git restore --source", owns=["src"])
+
+
+def test_guard_passes_owned_paths(wt):
+    env = {"SWARM_WORKER": "w", "SWARM_ROLE": "worker", "SWARM_WORKTREE": wt, "SWARM_ALLOW": "[]",
+           "SWARM_OWNS": os.path.join(wt, "src")}
+    allow = guard.decide({"tool_name": "Bash", "tool_input": {"command": "sed -i 's/a/b/' src/a.py"}, "cwd": wt}, env)
+    deny = guard.decide({"tool_name": "Bash", "tool_input": {"command": "sed -i 's/a/b/' README.md"}, "cwd": wt}, env)
+    assert allow["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert deny["hookSpecificOutput"]["permissionDecision"] == "deny"

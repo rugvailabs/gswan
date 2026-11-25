@@ -102,11 +102,16 @@ class Monitor:
         self._threads: list[threading.Thread] = []
         self._dispatching: set[str] = set()
         self._stop = threading.Event()
+        from .sleep import SleepClock, Sleeps
+        self.clock, self.sleeps = SleepClock(), Sleeps(gate.board)
 
     # ---- detection -----------------------------------------------------------------
     def diagnose(self, w: Worker, now: datetime) -> Finding:
         t = self.th
         last = _ts(w.last_activity)
+        woke = self.sleeps.last_wake()
+        if woke and last and woke > last:
+            last = woke  # silence while the machine slept is not a stall: count from when it woke
         quiet = (now - last).total_seconds() if last else None
         if w.status == "running":
             if quiet is not None and quiet > t.stall_s:
@@ -141,6 +146,7 @@ class Monitor:
     def step(self, now: datetime | None = None) -> list[Finding]:
         """Diagnose and act once. Returns findings with `action` filled in."""
         now = now or datetime.now(timezone.utc)
+        self.note_sleep()
         self.dispatch()
         try:
             self.gate.resume()  # paused verifications restart once a human raised the budget (CLI or dashboard)
@@ -185,6 +191,13 @@ class Monitor:
                     self._escalate(w, f); f.action = "escalate"
             out.append(f)
         return out
+
+    def note_sleep(self) -> None:
+        span = self.clock.tick()
+        if span:
+            self.sleeps.record(*span)
+            self._post("update", f"machine slept for {int((span[1] - span[0]).total_seconds())}s; that time does not count "
+                                 "against the wall-time budget and quiet workers are timed from the wake-up")
 
     def dispatch(self) -> list[str]:
         """Wake idle workers that have queued (peer) mentions. Skipped silently when the budget is exhausted."""

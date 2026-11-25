@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS approvals (
   program TEXT, status TEXT NOT NULL DEFAULT 'pending', decision TEXT, note TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, decided_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_approvals ON approvals(swarm_id, worker, status);
+CREATE TABLE IF NOT EXISTS sleeps (
+  swarm_id TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS paused (
   swarm_id TEXT NOT NULL, worker TEXT NOT NULL, reason TEXT NOT NULL, ts TEXT NOT NULL, PRIMARY KEY (swarm_id, worker));
 CREATE TABLE IF NOT EXISTS ran_commands (

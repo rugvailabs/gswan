@@ -17,6 +17,16 @@ decide a path (`cd`, mkdir/touch, git add) or the program to run.
 Read-only extras (found by a real run, where critics and verifiers were denied harmless reads): `sed -n` with print-only
 scripts, `find` without actions (-exec, -delete, ...), and `git -C <dir>` with a read subcommand inside this swarm's worktrees.
 
+Loops and edits (found by the orders-bugs eval, where a worker was denied `for f in shop/*.py; do cat -n $f; done`,
+`sed -i` and `git stash`):
+- `for NAME in WORDS; do ...; done` is unrolled: every body command is checked once per word, with $NAME replaced by it.
+  No nested loops, no `cd` in the body, no `$` in the words.
+- `sed -i` (workers only) edits files the worker OWNS, with substitution scripts only (`s/a/b/g`; flags g, I and digits).
+  Other sed commands could write (`w`) or, in GNU sed, run (`e`) anything. A backup suffix is not allowed (`-i ''` is).
+- `git restore --source REV <paths>` / `git checkout REV -- <paths>` on owned paths, e.g. to check that a new test fails on
+  the old code. `git stash` stays denied: the stash is shared by every worktree of the repo, so one worker's
+  `git stash pop` could apply another worker's changes.
+
 Granted tools come from `define_worker(tools=[...])` as `Bash(prog:*)` / `Bash(prog sub:*)` / exact `Bash(full cmd)`.
 A grant such as `python3` is still arbitrary code execution (python3 -c can do anything): grant narrowly
 (`Bash(python3 -m pytest:*)`). This policy removes friction; it is not a sandbox.
@@ -45,6 +55,7 @@ _SHELL_PREFIXES = ("SWARM_", "CLAUDE", "ANTHROPIC", "GIT_", "LD_", "DYLD_", "PYT
                    "UV_", "PIP_", "VIRTUAL_ENV", "CONDA", "LC_", "XDG_")
 _SED_PRINT = re.compile(r"^\s*(?:(?:\d+|\$|/[^/]*/)(?:\s*,\s*(?:\d+|\$|/[^/]*/|\+\d+))?\s*)?p\s*$")
 _SED_FLAGS = {"-n", "-E", "-r", "--quiet", "--silent", "-s", "-u"}
+_REV = re.compile(r"^[A-Za-z0-9_./~^@{}-]+$")
 _FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
 
 
@@ -161,8 +172,54 @@ def _no_var(words: list[str], what: str) -> None:
         raise Denied(f"an unknown $variable may not decide {what}; set it earlier in the same command (NAME=value) or write the value")
 
 
+def _owned(path: str, owns: list[str]) -> bool:
+    return any(_inside(path, o) for o in owns)
+
+
+def _unroll(segs: list[str]) -> list[str]:
+    """`for NAME in WORDS` / `do CMD` / ... / `done` segments -> the body segments once per word, $NAME replaced."""
+    out, i = [], 0
+    while i < len(segs):
+        seg = segs[i]
+        try:
+            words = shlex.split(seg)
+        except ValueError:
+            raise Denied(f"cannot parse: {seg[:80]}")
+        if words[:1] in (["do"], ["done"]):
+            raise Denied("`do`/`done` outside a for loop")
+        if words[:1] != ["for"]:
+            out.append(seg); i += 1; continue
+        if len(words) < 4 or words[2] != "in" or not _ASSIGN.match(words[1] + "="):
+            raise Denied("only `for NAME in WORD ...; do ...; done` loops are allowed")
+        name, items = words[1], words[3:]
+        if any("$" in w for w in items):
+            raise Denied("for-loop words may not contain $variables")
+        body, i, closed = [], i + 1, False
+        while i < len(segs):
+            b = segs[i].strip()
+            i += 1
+            if b == "done":
+                closed = True
+                break
+            if b == "do":
+                continue
+            if b.startswith("do ") and not body:
+                b = b[3:].strip()
+            first = b.split(None, 1)[0] if b else ""
+            if first in ("for", "while", "until", "if", "do", "done"):
+                raise Denied("nested loops or conditionals are not allowed inside a for loop")
+            if first == "cd":
+                raise Denied("cd is not allowed inside a for loop")
+            body.append(b)
+        if not closed or not body:
+            raise Denied("for loop without `do ...; done`")
+        for item in items:
+            out.extend(_expand(b, {name: shlex.quote(item)}) for b in body)
+    return out
+
+
 def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: list[str], cli_python: str | None,
-          branch_prefix: str | None, env=None) -> None:
+          branch_prefix: str | None, env=None, owns: list[str] | None = None) -> None:
     """Raise Denied (with a model-readable reason) unless every simple command in `command` is allowed.
     `env` is the environment the shell runs with (default: this process's), used to refuse overriding existing variables."""
     env = os.environ if env is None else env
@@ -170,8 +227,9 @@ def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: li
     cur = cwd or worktree
     if not _inside(cur, worktree):
         raise Denied(f"working directory {cur} is outside your worktree")
+    owns = owns or []
     shell_vars: dict[str, str] = {}
-    for seg in split_commands(command):
+    for seg in _unroll(split_commands(command)):
         seg = _expand(seg, shell_vars)
         try:
             words = shlex.split(seg)
@@ -217,7 +275,7 @@ def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: li
                 raise Denied("sort -o writes files")
             continue
         if prog == "sed":
-            _check_sed(words)
+            _check_sed(words, role, cur, owns)
             continue
         if prog == "find":
             if bad := [a for a in words[1:] if a in _FIND_ACTIONS]:
@@ -233,7 +291,7 @@ def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: li
                     raise Denied(f"{prog} outside your worktree: {a}")
             continue
         if prog == "git":
-            _check_git(words, role, cur, worktree, branch_prefix)
+            _check_git(words, role, cur, worktree, branch_prefix, owns)
             continue
         if _matches(words, parsed):
             continue
@@ -242,27 +300,110 @@ def check(command: str, *, role: str, worktree: str, cwd: str | None, grants: li
                      f"mkdir, touch, ls, cat, grep, echo and similar read commands. If you need another command, post a `blocked` event.")
 
 
+def _check_restore(sub: str, args: list[str], cur: str, owns: list[str]) -> None:
+    """`git restore [--source REV] [--staged] [--worktree] [--] paths` or `git checkout REV -- paths`, owned paths only."""
+    paths: list[str] = []
+    if sub == "checkout":
+        if "--" not in args or args.index("--") != 1 or args[0].startswith("-") or not _REV.match(args[0]):
+            raise Denied("switching branches is not allowed; git checkout only as `git checkout <rev> -- <your files>`")
+        paths = args[2:]
+    else:
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a == "--":
+                paths.extend(args[i + 1:]); break
+            if a in ("-s", "--source") and i + 1 < len(args):
+                rev = args[i + 1]; i += 2
+            elif a.startswith("--source="):
+                rev = a.split("=", 1)[1]; i += 1
+            elif a in ("--staged", "-S", "--worktree", "-W"):
+                i += 1; continue
+            elif a.startswith("-"):
+                raise Denied(f"git restore {a} is not allowed")
+            else:
+                paths.append(a); i += 1; continue
+            if rev.startswith("-") or not _REV.match(rev):
+                raise Denied("git restore --source needs a plain revision")
+    _no_var(paths, "which files git restores")
+    if not paths:
+        raise Denied(f"git {sub} needs the files to restore")
+    _no_git_dir(paths)
+    for p in paths:
+        if not _owned(os.path.join(cur, p), owns):
+            raise Denied(f"git {sub} is not allowed on files you do not own: {p}")
+
+
 def _no_git_dir(paths: list[str]) -> None:
     """A nested .git/ that a worker built (config with core.fsmonitor or hooks) would make a later `git status` run any command."""
     if any(".git" in os.path.normpath(p).split(os.sep) for p in paths if not p.startswith("-")):
         raise Denied("creating or adding files inside a .git directory is not allowed")
 
 
-def _check_sed(words: list[str]) -> None:
-    """Read-only sed: -n with print-only scripts (`sed -n '10,40p' f`, `sed -n '/def x/,/^$/p' f`)."""
-    args, scripts, files, i = words[1:], [], [], 0
+def _subst_only(script: str) -> bool:
+    """True if the sed script is one or more `s<d>regex<d>replacement<d>flags` commands (flags g, I, digits)."""
+    i, n, count = 0, len(script), 0
+    while True:
+        while i < n and script[i] in " \t;\n":
+            i += 1
+        if i >= n:
+            return count > 0
+        if script[i] != "s" or i + 1 >= n:
+            return False
+        d = script[i + 1]
+        if d.isalnum() or d in "\\\n ;":
+            return False
+        i, parts = i + 2, 0
+        while parts < 2:
+            if i >= n:
+                return False
+            if script[i] == "\\":
+                i += 2; continue
+            if script[i] == d:
+                parts += 1
+            i += 1
+        while i < n and (script[i] in "gI" or script[i].isdigit()):
+            i += 1
+        if i < n and script[i] not in " \t;\n":
+            return False
+        count += 1
+
+
+def _check_sed(words: list[str], role: str = "worker", cur: str = "", owns: list[str] | None = None) -> None:
+    """Read-only sed (`sed -n '10,40p' f`, `sed -n '/def x/,/^$/p' f`), or, for workers, `sed -i` substitutions on owned files."""
+    args, scripts, files, i, inplace = words[1:], [], [], 0, False
     while i < len(args):
         a = args[i]
         if a == "-e" and i + 1 < len(args):
             scripts.append(args[i + 1]); i += 2; continue
+        if a in ("-i", "--in-place"):
+            inplace = True
+            if a == "-i" and i + 1 < len(args) and args[i + 1] == "":  # BSD sed: `-i ''` (no backup)
+                i += 1
+            i += 1; continue
+        if a.startswith("-i") or a.startswith("--in-place="):
+            raise Denied("sed -i with a backup suffix is not allowed (it writes another file); use `sed -i '' ...` or `sed -i ...`")
         if a.startswith("-"):
             if a not in _SED_FLAGS:
-                raise Denied(f"sed {a} is not allowed (only `sed -n '<lines>p' file` for reading)")
+                raise Denied(f"sed {a} is not allowed (only `sed -n '<lines>p' file` for reading, or `sed -i 's/a/b/' <owned file>`)")
         elif not scripts:
             scripts.append(a)
         else:
             files.append(a)
         i += 1
+    if inplace:
+        if role in READ_ONLY_ROLES:
+            raise Denied("read-only role: sed -i is not allowed")
+        if not scripts or not all(_subst_only(x) for x in scripts):
+            raise Denied("sed -i may only run substitutions (`s/old/new/` with flags g, I or a number); edit the file with your editor tool otherwise")
+        _no_var(files, "which files sed -i edits")
+        if not files:
+            raise Denied("sed -i needs the files to edit")
+        for f in files:
+            if not _owned(os.path.join(cur, f), owns or []):
+                raise Denied(f"sed -i is not allowed on files you do not own: {f}")
+        _no_git_dir(files)
+        return
     if "-n" not in args and "--quiet" not in args and "--silent" not in args:
         raise Denied("only `sed -n '<lines>p' file` is allowed (reading lines)")
     parts = [p for s in scripts for p in s.split(";") if p.strip()]
@@ -270,7 +411,7 @@ def _check_sed(words: list[str]) -> None:
         raise Denied("sed scripts may only print lines (e.g. '10,40p' or '/start/,/end/p')")
 
 
-def _check_git(words: list[str], role: str, cur: str, worktree: str, branch_prefix: str | None) -> None:
+def _check_git(words: list[str], role: str, cur: str, worktree: str, branch_prefix: str | None, owns: list[str] | None = None) -> None:
     if len(words) >= 4 and words[1] == "-C" and words[3] in GIT_READ and words[3] != "branch":
         target = os.path.join(cur, words[2])
         swarm_wt = os.path.dirname(os.path.realpath(worktree))  # .swarm/wt holds this swarm's worktrees (a verifier reads a teammate's)
@@ -296,6 +437,13 @@ def _check_git(words: list[str], role: str, cur: str, worktree: str, branch_pref
         elif any(a in ("--amend", "-C", "-c") or a.startswith("--author") for a in args):
             raise Denied("git commit --amend / --author are not allowed")
         return
+    if sub in ("restore", "checkout"):
+        _check_restore(sub, args, cur, owns or [])
+        return
+    if sub == "stash":
+        raise Denied("git stash is shared by every worker's worktree, so it is not allowed. To run tests against the original "
+                     "code, use `git restore --source <base> -- <your files>`, then `git restore --source HEAD -- <your files>` "
+                     "to go back (or read it with `git show <base>:<path>`).")
     if sub == "merge" and branch_prefix:
         branches = [a for a in args if not a.startswith("-")]
         flags = [a for a in args if a.startswith("-")]

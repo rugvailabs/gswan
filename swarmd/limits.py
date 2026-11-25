@@ -1,4 +1,4 @@
-"""Per-swarm budgets: workers, wake-ups (turns), wall time, tokens (input + output; cache reads are not counted). Exceeding one stops new turns and posts `blocked`.
+"""Per-swarm budgets: workers, wake-ups (turns), wall time (awake time: machine sleep is not counted), tokens (input + output; cache reads are not counted). Exceeding one stops new turns and posts `blocked`.
 Only a human raises limits (`swarm limits --set ...`); the coordinator can only choose them at swarm_start."""
 from __future__ import annotations
 
@@ -65,8 +65,10 @@ class LimitsStore:
                           "COALESCE(SUM(turns),0) AS wakeups, COALESCE(SUM(tokens_in+tokens_out+tokens_cache_write),0) AS tokens, "
                           "COALESCE(SUM(tokens_cache_read),0) AS cached FROM workers WHERE swarm_id=?",
                           (sw.id,)).fetchone()
-        return {"workers": r["workers"], "wakeups": r["wakeups"], "wall_s": int((now - started).total_seconds()),
-                "tokens": r["tokens"], "tokens_cached": r["cached"]}
+        from .sleep import Sleeps
+        slept = Sleeps(self.b).slept_s(started, now)  # a sleeping laptop does not use up the wall-time budget
+        return {"workers": r["workers"], "wakeups": r["wakeups"], "wall_s": max(0, int((now - started).total_seconds() - slept)),
+                "slept_s": int(slept), "tokens": r["tokens"], "tokens_cached": r["cached"]}
 
     def check_define(self, exempt: bool = False) -> None:
         lim, use = self.get(), self.usage()

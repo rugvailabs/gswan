@@ -168,6 +168,21 @@ def check(task: EvalTask, repo: Path) -> tuple[bool, str, float]:
     return ok, detail, score
 
 
+def stay_awake() -> tuple[subprocess.Popen | None, str]:
+    """macOS: keep the machine from idle-sleeping while the eval runs (a sleep cuts agents off mid-response and
+    skews wall time). Returns (caffeinate process or None, a warning to print or '')."""
+    if sys.platform != "darwin" or not shutil.which("caffeinate"):
+        return None, ""
+    proc = subprocess.Popen(["caffeinate", "-i", "-s", "-w", str(os.getpid())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        batt = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        batt = ""
+    warn = ("warning: on battery power. macOS may still sleep (always with the lid closed), which interrupts runs; "
+            "plug in and keep the lid open.") if "Battery Power" in batt else ""
+    return proc, warn
+
+
 def single_command(task: EvalTask, claude: str, model: str, budget: float) -> list[str]:
     return [claude, "-p", task.prompt, "--model", model, "--output-format", "json", "--permission-mode", "dontAsk",
             "--max-budget-usd", str(budget), "--allowedTools", "Read", "Glob", "Grep", "Write", "Edit", "Bash(git:*)", *task.tools]
