@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-from typing import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Literal
 
 from pathlib import Path
 
@@ -59,6 +60,17 @@ class ApprovalIn(CamelModel):
     note: str = Field(default="", max_length=500)
 
 
+class OpenIn(CamelModel):
+    target: Literal["folder", "vscode"]
+    worker: str | None = Field(default=None, max_length=64)
+
+
+class RunIn(CamelModel):
+    confirm: bool = False  # running executes agent-written code: the human must say yes explicitly
+    install: bool = False
+    worker: str | None = Field(default=None, max_length=64)
+
+
 class MentionIn(CamelModel):
     message: str = Field(min_length=1, max_length=8000)
     sender: str = Field(default="human", pattern=r"^[A-Za-z0-9_.-]{1,64}$")
@@ -66,7 +78,16 @@ class MentionIn(CamelModel):
 
 def create_app(board: Board, token: str | None = None, tools=None, ui_dir: Path | None = None) -> FastAPI:
     """`tools` is a swarmd.mcp_server.SwarmTools (workers/status/mentions); `ui_dir` the built web UI."""
-    app = FastAPI(title="swarmd", version="0.1.0")
+    from . import result
+    runs = result.Runs()  # at most one project process per server
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        yield
+        await asyncio.to_thread(runs.stop)
+
+    app = FastAPI(title="swarmd", version="0.1.0", lifespan=lifespan)
+    app.state.runs = runs
 
     def auth(request: Request, authorization: str | None = Header(default=None)) -> None:
         if token is None:
@@ -132,6 +153,56 @@ def create_app(board: Board, token: str | None = None, tools=None, ui_dir: Path 
             return diffs.worker_diff(board, board.db_path.parent.parent, name)
         except WorkerError as e:
             raise HTTPException(404, str(e))
+
+    def _result_call(fn, *args, **kw):
+        try:
+            return fn(*args, **kw)
+        except result.NoLocation as e:
+            raise HTTPException(404, str(e))
+        except result.RunBusy as e:
+            raise HTTPException(409, str(e))
+        except result.ResultError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/result", response_model=result.ResultView, dependencies=guard)
+    def get_result(worker: str | None = None) -> result.ResultView:
+        """Where the finished project is, what changed in it and how to run it."""
+        return _result_call(result.build, board, board.db_path.parent.parent, worker)
+
+    @app.post("/result/open", dependencies=guard)
+    def open_result(body: OpenIn) -> dict:
+        loc = _result_call(result.resolve, board, board.db_path.parent.parent, body.worker)
+        _result_call(result.open_location, loc.path, body.target)
+        return {"ok": True, "path": loc.path}
+
+    @app.get("/result/run", response_model=result.RunState, dependencies=guard)
+    def run_state() -> result.RunState:
+        return runs.state()
+
+    @app.post("/result/run", response_model=result.RunState, dependencies=guard)
+    def run_result(body: RunIn) -> result.RunState:
+        if body.confirm is not True:
+            raise HTTPException(400, "running the project executes code the agents wrote; send confirm: true to go ahead")
+        return _result_call(result.start_run, board, board.db_path.parent.parent, runs, body.worker, body.install)
+
+    @app.post("/result/run/stop", response_model=result.RunState, dependencies=guard)
+    def stop_result() -> result.RunState:
+        return runs.stop()
+
+    @app.get("/result/zip", dependencies=guard)
+    def zip_result(worker: str | None = None):
+        from fastapi.responses import StreamingResponse
+        root = board.db_path.parent.parent
+        loc = _result_call(result.resolve, board, root, worker)
+        name = result.safe_name(root.name)
+        data = _result_call(result.zip_location, loc.path, name)
+        def chunks():
+            with data:
+                while block := data.read(1 << 16):
+                    yield block
+
+        return StreamingResponse(chunks(), media_type="application/zip",
+                                 headers={"Content-Disposition": f'attachment; filename="{name}-result.zip"'})
 
     @app.get("/stale-workers", response_model=list[StaleWorker], dependencies=guard)
     def stale(minutes: float = Query(10, gt=0)) -> list[StaleWorker]:

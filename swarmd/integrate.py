@@ -17,6 +17,13 @@ class IntegrationError(Exception):
     pass
 
 
+def integration_paths(board, root: Path) -> tuple[Path, str]:
+    """The current swarm's integration worktree and branch (they may not exist yet)."""
+    sw = board._require()
+    # one worktree per swarm: a shared path made a second swarm silently merge into the first swarm's branch
+    return Path(root) / ".swarm" / "wt" / f"_integration-{sw.id}", f"swarm/{sw.id}/integration"
+
+
 class Integrator:
     def __init__(self, gate: Gate):
         self.gate, self.runner, self.board = gate, gate.runner, gate.board
@@ -35,9 +42,7 @@ class Integrator:
         return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, env=self._env())
 
     def paths(self) -> tuple[Path, str]:
-        sw = self.board._require()
-        # one worktree per swarm: a shared path made a second swarm silently merge into the first swarm's branch
-        return self.root / ".swarm" / "wt" / f"_integration-{sw.id}", f"swarm/{sw.id}/integration"
+        return integration_paths(self.board, self.root)
 
     def ensure(self) -> tuple[Path, str]:
         wt, branch = self.paths()
