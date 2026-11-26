@@ -108,7 +108,7 @@ class SwarmTools:
             task = {"id": t.id, "status": t.status, "failedRounds": t.rounds, "reasons": t.reasons}
         except Exception:
             task = None
-        return {"task": task, "name": w.name, "status": w.status, "busy": self._busy(w.name), "turns": w.turns,
+        return {"task": task, "name": w.name, "role": w.role, "goal": w.goal, "status": w.status, "busy": self._busy(w.name), "turns": w.turns,
                 "tokens": tokens.worker_view(w), "owns": w.owns, "branch": w.branch, "model": w.model, "queue": self.runner.reg.queue_len(w),
                 "recentTools": w.recent_tools, "checks": w.checks, "group": w.group, "lastActivity": w.last_activity, "activityNote": w.activity_note,
                 "worktree": w.worktree, "lastError": w.last_error, "lastResult": self.last.get(w.name)}

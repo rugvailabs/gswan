@@ -198,7 +198,7 @@ function explainUpdate(e: BoardEvent, b: string, who: string, r: ReadonlySet<str
   if ((m = /^critics skipped for ([A-Za-z0-9_.-]+)/.exec(b))) return out("…", `${cap(subject(m[1]!))} was a small change, so it goes straight to the checker`, "info");
   if ((m = /^(\d+) critic blocker\(s\) on ([A-Za-z0-9_.-]+)/.exec(b))) return out("✕", `Reviewers found ${m[1]} serious problem${m[1] === "1" ? "" : "s"} in ${subject(m[2]!)} and sent it back`, "bad");
   if ((m = /^(\d+) critic major\(s\) on ([A-Za-z0-9_.-]+)/.exec(b))) return out("↩", `Reviewers asked ${subject(m[2]!)} to fix or explain ${m[1]} thing${m[1] === "1" ? "" : "s"}`, "warn");
-  if ((m = /^merged (\d+) into /.exec(b))) return out("⧉", `Put ${m[1]} part${m[1] === "1" ? "" : "s"} together into one copy`, "good");
+  if ((m = /^merged ([A-Za-z0-9_.-]+) into /.exec(b))) return out("⧉", `Added ${subject(m[1]!)} into the combined copy`, "good");
   if (/^merge conflict in /.test(b)) return out("⧉", "Two parts changed the same files. The combiner is sorting it out.", "warn");
   if ((m = /^([A-Za-z0-9_.-]+) paused before verification/.exec(b))) return out("‖", `${cap(subject(m[1]!))} is waiting until you allow more work`, "warn");
   if (/^budget allows work again/.test(b)) return out("▶", "Work picked up again where it stopped", "good");
@@ -279,7 +279,7 @@ export function journey(status: Pick<StatusResponse, "workers" | "allTasksSettle
 /** Which stage of the journey an event belongs to, so clicking a stage can show what happened in it. */
 export function stageOf(e: BoardEvent): StageKey {
   const b = e.body;
-  if (e.agent === "integrator" || /^merged \d+ into |^merge conflict in /.test(b) || /^(pass|fail) integrator:/.test(b)) return "combine";
+  if (e.agent === "integrator" || /^merged [A-Za-z0-9_.-]+ into |^merge conflict in /.test(b) || /^(pass|fail) integrator:/.test(b)) return "combine";
   switch (e.kind) {
     case "research": return "understand";
     case "plan": return /^researcher /.test(b) ? "understand" : "plan";
@@ -452,7 +452,7 @@ export function resultHeadline(r: Pick<ResultInfo, "stage" | "verified"> | null)
   if (r.stage === "applied") return { text: "Already added to your project", tone: "good" };
   if (r.verified === true) return { text: "All parts combined into one copy — checked ✓", tone: "good" };
   if (r.verified === false) return { text: "All parts combined into one copy — the check found problems", tone: "bad" };
-  return { text: "All parts combined into one copy — being checked", tone: "info" };
+  return { text: "All parts combined into one copy", tone: "good" };
 }
 
 export interface TreeNode { name: string; path: string; folder: boolean; status: ResultFileStatus | null; changed: number; children: TreeNode[] }

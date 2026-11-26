@@ -54,7 +54,7 @@ describe("explainEvent", () => {
     expect(x("update", "swarmd", "critics skipped for login-screen: docs only; the verifier still checks it").text).toMatch(/straight to the checker/);
     expect(x("update", "swarmd", "2 critic blocker(s) on login-screen (round 1); sent back to the worker")).toMatchObject({ tone: "bad", text: "Reviewers found 2 serious problems in Login Screen and sent it back" });
     expect(x("update", "swarmd", "1 critic major(s) on login-screen; sent back once").text).toBe("Reviewers asked Login Screen to fix or explain 1 thing");
-    expect(x("update", "swarmd", "merged 3 into swarm/x/integration")).toMatchObject({ tone: "good", text: "Put 3 parts together into one copy" });
+    expect(x("update", "swarmd", "merged auth-api into swarm/x/integration")).toMatchObject({ tone: "good", text: expect.stringContaining("into the combined copy") });
     expect(x("update", "swarmd", "merge conflict in a.py (api); integrator resolving").tone).toBe("warn");
     expect(x("update", "swarmd", "login-screen paused before verification; it resumes when a human raises the budget").tone).toBe("warn");
     expect(x("update", "swarmd", "budget allows work again; resuming verification of api").tone).toBe("good");
@@ -171,7 +171,7 @@ describe("journey", () => {
     expect(stageOf(ev("verify", "verify-api", "fail api: 1. x"))).toBe("fix");
     expect(stageOf(ev("update", "swarmd", "2 critic blocker(s) on api"))).toBe("fix");
     expect(stageOf(ev("blocked", "swarmd", "api failed verification 2 times; needs a human."))).toBe("fix");
-    expect(stageOf(ev("update", "swarmd", "merged 2 into b"))).toBe("combine");
+    expect(stageOf(ev("update", "swarmd", "merged ui into b"))).toBe("combine");
     expect(stageOf(ev("verify", "verify-integrator", "pass integrator: ok"))).toBe("combine");
   });
 });
