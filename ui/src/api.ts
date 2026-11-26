@@ -1,4 +1,4 @@
-import type { Approval, ApprovalDecision, BoardEvent, EventPage, StatusResponse, SwarmInfo, WorkerDiff, WorkerDraft, LimitsDraft } from "./types";
+import type { Approval, ApprovalDecision, BoardEvent, EventPage, OpenTarget, ResultInfo, RunState, StatusResponse, SwarmInfo, WorkerDiff, WorkerDraft, LimitsDraft } from "./types";
 
 const BASE: string = import.meta.env.DEV ? "/api" : "";
 
@@ -45,7 +45,23 @@ export const api = {
   report: (t: string | null) => call<{ markdown: string }>(t, "/report?format=markdown"),
   note: (t: string | null, body: string) =>
     call<BoardEvent>(t, "/events", { method: "POST", body: JSON.stringify({ agent: "human", kind: "human", body }) }),
+  result: (t: string | null, worker: string | null = null) => call<ResultInfo>(t, `/result${worker ? `?worker=${encodeURIComponent(worker)}` : ""}`),
+  openResult: (t: string | null, target: OpenTarget, worker: string | null = null) =>
+    call<{ ok: boolean; path: string }>(t, "/result/open", { method: "POST", body: JSON.stringify(worker ? { target, worker } : { target }) }),
+  startRun: (t: string | null, install: boolean, worker: string | null = null) =>
+    call<RunState>(t, "/result/run", { method: "POST", body: JSON.stringify({ confirm: true, install, ...(worker ? { worker } : {}) }) }),
+  runState: (t: string | null) => call<RunState>(t, "/result/run"),
+  stopRun: (t: string | null) => call<RunState>(t, "/result/run/stop", { method: "POST", body: "{}" }),
 };
+
+/** Download link for the result as a zip. A plain link cannot send headers, so the token goes in the query. */
+export function zipUrl(token: string | null, worker: string | null = null): string {
+  const q = new URLSearchParams();
+  if (token) q.set("token", token);
+  if (worker) q.set("worker", worker);
+  const qs = q.toString();
+  return `${BASE}/result/zip${qs ? `?${qs}` : ""}`;
+}
 
 /** Live board stream. EventSource reconnects by itself and resends Last-Event-ID, which the server honours. */
 export function openStream(token: string | null, sinceSeq: number, onEvent: (e: BoardEvent) => void, onState: (live: boolean) => void): () => void {

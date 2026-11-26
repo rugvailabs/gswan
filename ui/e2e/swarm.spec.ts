@@ -7,7 +7,7 @@ const cli = (...args: string[]) =>
   execFileSync("uv", ["run", "--quiet", "--project", `${process.cwd()}/..`, "swarm", ...args], { env: { ...process.env, SWARM_HOME: home() } });
 
 test("shows the seeded swarm, workers and board", async ({ page }) => {
-  await page.goto("/?token=e2e-token");
+  await page.goto("/?token=e2e-token#advanced");
   await expect(page.getByText("e2e swarm: build a tiny thing")).toBeVisible();
   await expect(page.getByRole("article", { name: "worker api" })).toBeVisible();
   await expect(page.getByRole("article", { name: "worker ui" })).toBeVisible();
@@ -18,14 +18,14 @@ test("shows the seeded swarm, workers and board", async ({ page }) => {
 });
 
 test("events posted from the CLI appear live without a reload", async ({ page }) => {
-  await page.goto("/?token=e2e-token");
+  await page.goto("/?token=e2e-token#advanced");
   await expect(page.getByLabel("connection")).toContainText("live");
   cli("post", "api", "update", "streamed from the cli");
   await expect(page.getByRole("region", { name: "board" }).getByText("streamed from the cli")).toBeVisible({ timeout: 8000 });
 });
 
 test("filter by kind", async ({ page }) => {
-  await page.goto("/?token=e2e-token");
+  await page.goto("/?token=e2e-token#advanced");
   const board = page.getByRole("region", { name: "board" });
   await expect(board.getByText("taking the api")).toBeVisible();
   await board.getByRole("button", { name: "blocked", exact: true }).click();
@@ -34,7 +34,7 @@ test("filter by kind", async ({ page }) => {
 });
 
 test("a human @mention wakes the worker and its reply shows up", async ({ page }) => {
-  await page.goto("/?token=e2e-token");
+  await page.goto("/?token=e2e-token#advanced");
   const card = page.getByRole("article", { name: "worker api" });
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: "@ mention" }).click();
@@ -47,7 +47,7 @@ test("a human @mention wakes the worker and its reply shows up", async ({ page }
 });
 
 test("a worker's committed changes show in the diff panel", async ({ page }) => {
-  await page.goto("/?token=e2e-token");
+  await page.goto("/?token=e2e-token#advanced");
   const card = page.getByRole("article", { name: "worker ui" });
   await card.getByRole("button", { name: "diff" }).click();
   const panel = page.getByRole("region", { name: "diff ui" });
@@ -65,7 +65,7 @@ test("a worker's committed changes show in the diff panel", async ({ page }) => 
 });
 
 test("replay steps back through the run and plays forward again", async ({ page }) => {
-  await page.goto("/?token=e2e-token");
+  await page.goto("/?token=e2e-token#advanced");
   const board = page.getByRole("region", { name: "board" });
   await expect(board.getByText("need the api shape first")).toBeVisible();
   await board.getByRole("tab", { name: "Replay" }).click();
@@ -88,8 +88,22 @@ test("a wrong token shows an error instead of data", async ({ page }) => {
 
 test("layout holds at phone width with no horizontal scroll", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
-  await page.goto("/?token=e2e-token");
+  await page.goto("/?token=e2e-token#advanced");
   await expect(page.getByRole("article", { name: "worker api" })).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
+});
+
+test("the plain Overview is the default and fits a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto("/?token=e2e-token");
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("region", { name: "what are we building" })).toContainText("e2e swarm: build a tiny thing");
+  await expect(page.getByRole("article", { name: "part API" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "your project" })).toBeVisible();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+  await page.getByRole("tab", { name: "Advanced" }).click();
+  await expect(page).toHaveURL(/#advanced$/);
+  await expect(page.getByRole("article", { name: "worker api" })).toBeVisible();
 });

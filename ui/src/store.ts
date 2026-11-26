@@ -1,7 +1,10 @@
 import { create } from "zustand";
-import { api, openStream } from "./api";
+import { api, ApiError, openStream } from "./api";
 import { mergeEvents } from "./lib";
-import type { ApprovalDecision, BoardEvent, EventKind, LimitsDraft, StatusResponse, SwarmInfo, WorkerDraft } from "./types";
+import type { ApprovalDecision, BoardEvent, EventKind, LimitsDraft, ResultInfo, StatusResponse, SwarmInfo, WorkerDraft } from "./types";
+
+/** "unavailable": the server has no /result endpoint yet (404), so the Overview says so instead of failing. */
+export type ResultLoad = "idle" | "loading" | "ok" | "unavailable" | "error";
 
 interface State {
   token: string | null;
@@ -33,6 +36,13 @@ interface State {
   start: () => () => void;
   sendMention: (worker: string, message: string) => Promise<void>;
   sendNote: (message: string) => Promise<void>;
+  result: ResultInfo | null;
+  resultLoad: ResultLoad;
+  resultError: string | null;
+  /** Which builder's draft copy the result card shows; null = the server's default location. */
+  resultWorker: string | null;
+  setResultWorker: (w: string | null) => void;
+  loadResult: () => Promise<void>;
 }
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -50,6 +60,25 @@ export const useStore = create<State>((set, get) => ({
   view: "board",
   threadAgent: null,
   diffWorker: null,
+  result: null,
+  resultLoad: "idle",
+  resultError: null,
+  resultWorker: null,
+  setResultWorker: (resultWorker) => {
+    set({ resultWorker });
+    void get().loadResult();
+  },
+  loadResult: async () => {
+    const { token, resultWorker } = get();
+    if (get().resultLoad === "idle") set({ resultLoad: "loading" });
+    try {
+      const result = await api.result(token, resultWorker);
+      if (get().resultWorker === resultWorker) set({ result, resultLoad: "ok", resultError: null });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404 && resultWorker === null) set({ result: null, resultLoad: "unavailable", resultError: null });
+      else set({ resultLoad: "error", resultError: msg(e) });
+    }
+  },
   openDiff: (diffWorker) => set({ diffWorker }),
   setView: (view) => set({ view }),
   openThread: (threadAgent) => set({ view: "threads", threadAgent }),
