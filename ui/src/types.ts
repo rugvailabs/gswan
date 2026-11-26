@@ -46,6 +46,9 @@ export interface WorkerView {
   lastActivity: string | null;
   activityNote: string | null;
   recentTools?: string[];
+  /** Newer servers may send these; the Overview falls back to plan events when they are missing. */
+  goal?: string | null;
+  role?: string | null;
   lastError: string | null;
   task: TaskView | null;
 }
@@ -126,3 +129,40 @@ export interface WorkerDiff {
   critiques: DiffFinding[];
   verdicts: DiffVerdict[];
 }
+
+// ---- Result API (GET /result and friends): where the final work is and what to do with it ----
+export type ResultStage = "none" | "workers" | "integration" | "applied";
+export interface ResultLocation { path: string; branch: string | null; kind: "integration" | "worker" | "repo"; worker: string | null }
+export interface ResultWorker { name: string; branch: string | null; path: string | null; taskStatus: string | null }
+export type ProjectKind = "node" | "python" | "fullstack" | "static" | "unknown";
+export interface ResultProject {
+  kind: ProjectKind;
+  label: string;
+  runCommand: string[] | null;
+  installCommand: string[] | null;
+  template: string | null;
+  cwd: string;
+}
+export type ResultFileStatus = "added" | "modified" | "deleted" | "unchanged";
+export interface ResultFile { path: string; status: ResultFileStatus }
+export interface ResultInfo {
+  stage: ResultStage;
+  location: ResultLocation | null;
+  workers: ResultWorker[];
+  merged: string[];
+  verified: boolean | null;
+  applyCommand: string | null;
+  project: ResultProject | null;
+  files: ResultFile[];
+  summary: { added: number; modified: number; deleted: number; total: number };
+}
+export interface RunState {
+  running: boolean;
+  command: string[] | null;
+  cwd: string | null;
+  startedAt: string | null;
+  exitCode: number | null;
+  url: string | null;
+  log: string[];
+}
+export type OpenTarget = "folder" | "vscode";

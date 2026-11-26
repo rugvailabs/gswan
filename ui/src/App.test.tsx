@@ -68,8 +68,9 @@ beforeEach(() => {
     return json({ message: "nope" }, 404);
   }));
   useStore.setState({ token: "tok", swarm: null, status: null, events: [], live: false, error: null, kinds: new Set(), agent: null, mentionTarget: null, diffWorker: null, view: "board" });
+  window.location.hash = "#advanced"; // these tests cover the technical dashboard; Overview.test.tsx covers the default view
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
 
 describe("App", () => {
   it("renders swarm header, worker cards, board and live state", async () => {
