@@ -66,7 +66,7 @@ def test_role_filtering_and_real_stdio_server(tools, repo):
     t, _ = tools
     coord = {x.name for x in asyncio.run(build_server(t, "coordinator").list_tools())}
     worker = {x.name for x in asyncio.run(build_server(t, "worker").list_tools())}
-    assert coord == {"swarm_start", "define_worker", "define_researcher", "critique_plan", "invoke_worker", "set_worker_model", "wait_for_workers", "swarm_status", "merge_workers", "record_decision", "board_post", "board_digest"}
+    assert coord == {"swarm_start", "define_worker", "define_researcher", "critique_plan", "invoke_worker", "set_worker_model", "wait_for_workers", "swarm_status", "merge_workers", "record_decision", "list_templates", "apply_template", "board_post", "board_digest"}
     assert worker == {"board_post", "board_digest"}
 
 

@@ -377,6 +377,38 @@ def cmd_worker(b: Board, a, root: Path) -> int:
     return 0
 
 
+def cmd_template(a) -> int:
+    """`template list|apply` and `new`: human/coordinator only (agents must never re-scaffold a project)."""
+    from . import templates
+    if a.cmd == "template" and a.tcmd == "list":
+        for t in templates.list_templates():
+            print(f"{t['name']:<12} {t['title']}\n{'':<12} {t['description']}")
+        return 0
+    if os.environ.get("SWARM_ROLE"):
+        print("error: only a human or the coordinator can apply templates", file=sys.stderr)
+        return 3
+    try:
+        if a.cmd == "new":
+            written = templates.new_project(a.dir, a.template)
+            t = templates.get(a.template)
+            print(f"created {a.dir} from {a.template} ({len(written)} files, committed)")
+        else:
+            dest = Path(a.dir)
+            written = templates.apply(a.template, dest, force=a.force)
+            t = templates.get(a.template)
+            if a.commit:
+                templates.ensure_repo(dest)
+                sha = templates.commit(dest, written, templates.commit_message(a.template))
+                print(f"applied {a.template} to {dest} ({len(written)} files), commit {sha[:10]}")
+            else:
+                print(f"applied {a.template} to {dest} ({len(written)} files, not committed)")
+    except templates.TemplateError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"install: {' '.join(t['install'])}\nrun:     {' '.join(t['run'])}" + (f"  (in {t['cwd']})" if t.get("cwd") else ""))
+    return 0
+
+
 def cmd_serve(b: Board, a, root: Path) -> int:
     import uvicorn
     from .api import create_app
@@ -456,6 +488,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--stall-s", type=float, default=300); s.add_argument("--idle-s", type=float, default=120)
     s.add_argument("--grace-s", type=float, default=60)
     s.add_argument("--llm-judge", action="store_true", help="ask a small model whether a quiet worker is progressing before killing it")
+    t = sub.add_parser("template", help="starter project templates (list | apply)").add_subparsers(dest="tcmd", required=True)
+    t.add_parser("list")
+    x = t.add_parser("apply", help="human: copy a template into an empty directory (never overwrites)")
+    x.add_argument("template"); x.add_argument("--dir", default=".")
+    x.add_argument("--commit", action="store_true", help="git init if needed and commit the new files")
+    x.add_argument("--force", action="store_true", help="also into a non-empty directory (existing files are kept)")
+    s = sub.add_parser("new", help="human: new project directory from a template (git init + first commit)")
+    s.add_argument("dir"); s.add_argument("--template", required=True)
     s = sub.add_parser("serve", help="run the HTTP API + SSE on 127.0.0.1")
     s.add_argument("--port", type=int, default=7777); s.add_argument("--no-auth", action="store_true")
     return p
@@ -463,6 +503,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
+    if a.cmd in ("template", "new"):  # before find_root: never create .swarm/ where a project is being started
+        return cmd_template(a)
     root = find_root()
     ensure_swarm_dir(root)
     b = open_board(root)

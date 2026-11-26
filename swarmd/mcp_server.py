@@ -1,6 +1,6 @@
 """MCP server (stdio) exposing the swarm to Claude Code agents.
 
-Coordinator (default): swarm_start, define_worker, invoke_worker, wait_for_workers, record_decision, swarm_status, board_post, board_digest.
+Coordinator (default): swarm_start, list_templates, apply_template, define_worker, invoke_worker, wait_for_workers, record_decision, swarm_status, board_post, board_digest.
 Workers (SWARM_ROLE=worker): board_post, board_digest only.
 `invoke_worker` is non-blocking (a turn can take minutes); use `wait_for_workers` to block with a bounded timeout.
 """
@@ -266,6 +266,34 @@ class SwarmTools:
             return self._err(e)
         return {"ok": True, **self.runner.limits.snapshot(), "resumed": self.resume()}
 
+    def list_templates(self) -> dict:
+        """Starter project templates for a NEW product (name, title, plain-language description, stack)."""
+        from . import templates
+        return {"ok": True, "templates": [{k: t[k] for k in ("name", "title", "description", "stack")} for t in templates.list_templates()]}
+
+    def apply_template(self, name: str) -> dict:
+        """Scaffold the repo root from a template and commit it on the current branch. Only for a new/empty repo
+        (nothing but README/LICENSE/.gitignore/.git/.swarm/.claude/.mcp.json); a repo without any commit gets its first one."""
+        from . import templates
+        root = self.runner.root
+        try:
+            t = templates.get(name)
+            if bad := templates.blockers(root):
+                raise templates.TemplateError(f"the repo is not new/empty ({', '.join(bad[:8])}); never apply a template to an existing project")
+            templates.ensure_repo(root)
+            written = templates.apply(name, root)
+            sha = templates.commit(root, written, templates.commit_message(name))
+        except templates.TemplateError as e:
+            return self._err(e)
+        posted = False
+        try:
+            self.board.post(EventIn(agent="coordinator", kind="plan", body=f"Started from the {t['title']} template", refs=[f"template:{name}"]))
+            posted = True
+        except NoActiveSwarm:
+            pass
+        return {"ok": True, "template": name, "title": t["title"], "commit": sha, "files": written, "posted": posted,
+                "install": t["install"], "run": t["run"], "cwd": t["cwd"], "tools": t["tools"], "checks": t["checks"]}
+
     def swarm_status(self) -> dict:
         try:
             ws = [self._worker_view(w) for w in self.runner.reg.list() + self.runner.reg.list_researchers() + self.runner.reg.list_critics() if w.name == "plan-critic" or w.role != "critic"]
@@ -337,6 +365,11 @@ def build_server(tools: SwarmTools, role: str = "coordinator") -> MCPServer:
             "paths), escalation (worker=<name>: what you did and told the user), critic (worker=<name> or `plan`: how each blocker was "
             "fixed or why it was overridden), other. merge_workers and finishing are refused while a required one is missing "
             "(see `missingDecisions` in swarm_status)."))
+        srv.add_tool(tools.list_templates, name="list_templates", description=(
+            "Starter project templates (runnable scaffolds in the user's default stack). Only for a NEW product in an empty repo."))
+        srv.add_tool(tools.apply_template, name="apply_template", description=(
+            "Scaffold the repo root from a template and commit it on the current branch (the first commit if there is none). "
+            "Refused unless the repo is new/empty. Returns the template's `tools` and `checks`: give them to workers in define_worker."))
         srv.add_tool(tools.swarm_status, name="swarm_status", description="Workers, stale workers, decisions you still owe and the board digest.")
     return srv
 

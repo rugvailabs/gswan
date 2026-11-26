@@ -26,6 +26,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["swarmd"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "swarmd/_templates"  # starter templates (swarmd/templates.py) for non-plugin installs
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

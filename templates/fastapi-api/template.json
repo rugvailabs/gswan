@@ -1,0 +1,11 @@
+{
+  "name": "fastapi-api",
+  "title": "Backend API (FastAPI)",
+  "description": "A server that stores data and answers requests from other programs or a web page. Good when you need saved data, logins or a service other apps talk to.",
+  "stack": ["Python", "FastAPI", "Pydantic", "SQLite", "pytest", "uv"],
+  "install": ["uv", "sync"],
+  "run": ["uv", "run", "uvicorn", "app.main:app", "--reload", "--port", "8000"],
+  "cwd": "",
+  "tools": ["Bash(uv sync:*)", "Bash(uv run pytest:*)", "Bash(uv add:*)"],
+  "checks": ["uv run pytest -q"]
+}

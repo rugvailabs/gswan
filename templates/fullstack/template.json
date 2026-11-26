@@ -1,0 +1,15 @@
+{
+  "name": "fullstack",
+  "title": "Web app with a backend (React + FastAPI)",
+  "description": "A web page people click on plus a server that saves the data. Good for most products: accounts, lists, anything that must still be there tomorrow.",
+  "stack": ["React 19", "TypeScript (strict)", "Tailwind CSS 4", "Zustand", "Vite", "Vitest", "FastAPI", "Pydantic", "SQLite", "pytest", "uv"],
+  "include": [
+    {"template": "react-app", "into": "frontend"},
+    {"template": "fastapi-api", "into": "backend"}
+  ],
+  "install": ["python3", "dev.py", "install"],
+  "run": ["python3", "dev.py"],
+  "cwd": "",
+  "tools": ["Bash(npm install:*)", "Bash(npm test:*)", "Bash(npm run:*)", "Bash(uv sync:*)", "Bash(uv run pytest:*)", "Bash(uv add:*)"],
+  "checks": ["cd frontend && npm test", "cd frontend && npm run build", "cd backend && uv run pytest -q"]
+}
