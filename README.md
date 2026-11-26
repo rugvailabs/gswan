@@ -53,6 +53,22 @@ Cards per worker (status, task, monitor warnings, activity, tokens), the live bo
 
 **Pause, not fail.** When a budget runs out, work pauses: queued messages stay queued and tasks waiting for verification are held, not escalated. *Raise by 50% and resume* on the dashboard (or `swarm limits --set ...`) picks everything up where it stopped.
 
+## Starter templates
+A new product can start from a small, runnable scaffold instead of a blank folder. Three templates ship in `templates/`:
+
+| Template | What you get |
+|---|---|
+| `react-app` | A browser app: Vite + React 19 + TypeScript (strict) + Tailwind CSS 4 + Zustand, with one store, one component and a Vitest + Testing Library test |
+| `fastapi-api` | A server: FastAPI + Pydantic + SQLite (uv), `/health` and one example resource (prefixed ids, `limit`/`offset`, camelCase JSON), pytest tests |
+| `fullstack` | Both: `frontend/` (Vite sends `/api/...` to the backend) and `backend/`, plus `dev.py` to start them together |
+
+```
+todo template list
+todo new my-app --template fullstack                    # new folder, git init, first commit
+todo template apply react-app --dir . --commit          # into an empty folder or repo
+```
+In `/todo`, when you ask for a new product in an empty repo (or one without a commit), the coordinator proposes one template in a line (you can say no), applies it with the `apply_template` MCP tool, which commits it on the current branch, and gives workers the template's build/test permissions and verify commands. It never applies a template to an existing project: anything besides README, LICENSE, `.gitignore` and tool folders (`.git`, `.swarm`, `.claude`, `.mcp.json`) makes it refuse, and files are never overwritten. Each applied template writes `.todo-template.json` (name, title, install and run commands). Agents cannot apply templates from the CLI.
+
 ## How it works
 | Piece | What it does |
 |---|---|
@@ -67,9 +83,9 @@ Cards per worker (status, task, monitor warnings, activity, tokens), the live bo
 | Board | SQLite event log (`.swarm/swarm.db`), mirrored to `.swarm/board.md`; secrets are redacted before storage. |
 | Stop hook | Blocks the coordinator (max 3 times) while any task is not `done`/`escalated`. |
 
-MCP tools (coordinator): `swarm_start` (`critics=true` adds diff critics), `define_worker`, `define_researcher` (read-only web/repo research with cited `research` events), `critique_plan` (read-only plan critic),  `invoke_worker` (non-blocking), `wait_for_workers` (≤110 s, call again if `timedOut`), `merge_workers`, `record_decision`, `swarm_status`, `board_post`, `board_digest`.
+MCP tools (coordinator): `swarm_start` (`critics=true` adds diff critics), `define_worker`, `define_researcher` (read-only web/repo research with cited `research` events), `critique_plan` (read-only plan critic),  `invoke_worker` (non-blocking), `wait_for_workers` (≤110 s, call again if `timedOut`), `merge_workers`, `record_decision`, `swarm_status`, `list_templates` / `apply_template` (starter templates, new repos only), `board_post`, `board_digest`.
 
-CLI: `swarm init|post|show|tail|digest|stale|export|tasks|limits|mention|integrate|monitor|serve`, `swarm worker define|list|invoke`, `swarm verdict` (verifier role only; `--force` for humans).
+CLI: `swarm init|post|show|tail|digest|stale|export|tasks|limits|mention|integrate|monitor|serve|new`, `swarm template list|apply`, `swarm worker define|list|invoke`, `swarm verdict` (verifier role only; `--force` for humans).
 
 ## Configuration (environment)
 | Variable | Default | Meaning |

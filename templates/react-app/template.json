@@ -1,0 +1,11 @@
+{
+  "name": "react-app",
+  "title": "Web app (React)",
+  "description": "A web page that runs in the browser. Good for tools, dashboards and anything people click on, when you do not need to keep data on a server.",
+  "stack": ["React 19", "TypeScript (strict)", "Tailwind CSS 4", "Zustand", "Vite", "Vitest", "Testing Library"],
+  "install": ["npm", "install"],
+  "run": ["npm", "run", "dev"],
+  "cwd": "",
+  "tools": ["Bash(npm install:*)", "Bash(npm test:*)", "Bash(npm run:*)"],
+  "checks": ["npm test", "npm run build"]
+}
